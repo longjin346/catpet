@@ -1,29 +1,47 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { LAYER_Z_INDEX, type LayerId, type RigDefinition } from '../utils/config'
 
-interface CatPhoto {
-  role: string
-  dataUrl: string
+interface SegmentImage {
+  id: LayerId
+  img: HTMLImageElement
+  zIndex: number
 }
 
 export default function PetView() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [primaryPhoto, setPrimaryPhoto] = useState<CatPhoto | null>(null)
+  const [primaryDataUrl, setPrimaryDataUrl] = useState<string | null>(null)
+  const [segments, setSegments] = useState<SegmentImage[]>([])
   const posRef = useRef({ x: 200, y: 0 })
   const animRef = useRef(0)
 
-  const loadPhotos = useCallback(async () => {
+  const loadCatData = useCallback(async () => {
     const photos = await window.catpet.loadPhotos()
-    if (photos.primary) {
-      setPrimaryPhoto({ role: 'primary', dataUrl: photos.primary })
+    if (photos.primary) setPrimaryDataUrl(photos.primary)
+
+    // Try to load segments; fall back silently if none saved yet
+    const rawSegments = await window.catpet.loadSegments('primary')
+    const rawRig = await window.catpet.loadRig('primary') as RigDefinition | null
+
+    if (rawSegments && rawRig) {
+      const layerIds = Object.keys(rawSegments) as LayerId[]
+      const imgs: SegmentImage[] = await Promise.all(
+        layerIds.map(id => new Promise<SegmentImage>(resolve => {
+          const img = new Image()
+          img.onload = () => resolve({ id, img, zIndex: LAYER_Z_INDEX[id] ?? 0 })
+          img.onerror  = () => resolve({ id, img, zIndex: LAYER_Z_INDEX[id] ?? 0 })
+          img.src = rawSegments[id]
+        }))
+      )
+      imgs.sort((a, b) => a.zIndex - b.zIndex)
+      setSegments(imgs)
     }
   }, [])
 
   useEffect(() => {
-    loadPhotos()
-    // Re-load when main signals a new cat was configured
-    const unsubscribe = window.catpet.onCatLoaded(loadPhotos)
+    loadCatData()
+    const unsubscribe = window.catpet.onCatLoaded(loadCatData)
     return unsubscribe
-  }, [loadPhotos])
+  }, [loadCatData])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -31,56 +49,75 @@ export default function PetView() {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    canvas.width = window.innerWidth
+    canvas.width  = window.innerWidth
     canvas.height = window.innerHeight
 
-    let catImg: HTMLImageElement | null = null
-
-    if (primaryPhoto) {
-      catImg = new Image()
-      catImg.src = primaryPhoto.dataUrl
+    // Flat fallback image
+    let flatImg: HTMLImageElement | null = null
+    if (primaryDataUrl && segments.length === 0) {
+      flatImg = new Image()
+      flatImg.src = primaryDataUrl
     }
 
-    const CAT_SCALE = 150 // target height in px
+    const CAT_SCALE = 150
     let frame = 0
+
+    // Compute draw geometry from a source image's natural dimensions
+    function geometry(naturalW: number, naturalH: number) {
+      const aspect = naturalW / naturalH
+      const drawH  = CAT_SCALE
+      const drawW  = drawH * aspect
+      const bob    = Math.sin(frame * 0.04) * 1.5
+      const drawX  = posRef.current.x - drawW / 2
+      const drawY  = canvas!.height - drawH + posRef.current.y + bob
+      return { drawX, drawY, drawW, drawH }
+    }
 
     function draw() {
       if (!ctx || !canvas) return
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-      const { x, y } = posRef.current
-      const bob = Math.sin(frame * 0.04) * 1.5 // subtle breathing: ±1.5px
-
-      if (catImg && catImg.complete && catImg.naturalWidth > 0) {
-        // Scale to target height while keeping aspect ratio
-        const aspect = catImg.naturalWidth / catImg.naturalHeight
-        const drawH = CAT_SCALE
-        const drawW = drawH * aspect
-        const drawX = x - drawW / 2
-        const drawY = canvas.height - drawH + y + bob
-
-        // Soft drop shadow under the cat
-        ctx.shadowColor = 'rgba(0,0,0,0.18)'
-        ctx.shadowBlur = 10
+      if (segments.length > 0) {
+        // Use the first loaded segment to establish geometry
+        const ref = segments.find(s => s.img.complete && s.img.naturalWidth > 0)
+        if (ref) {
+          const { drawX, drawY, drawW, drawH } = geometry(ref.img.naturalWidth, ref.img.naturalHeight)
+          ctx.shadowColor   = 'rgba(0,0,0,0.18)'
+          ctx.shadowBlur    = 10
+          ctx.shadowOffsetY = 6
+          for (const seg of segments) {
+            if (seg.img.complete && seg.img.naturalWidth > 0) {
+              ctx.drawImage(seg.img, drawX, drawY, drawW, drawH)
+            }
+          }
+          ctx.shadowColor   = 'transparent'
+          ctx.shadowBlur    = 0
+          ctx.shadowOffsetY = 0
+        }
+      } else if (flatImg && flatImg.complete && flatImg.naturalWidth > 0) {
+        const { drawX, drawY, drawW, drawH } = geometry(flatImg.naturalWidth, flatImg.naturalHeight)
+        ctx.shadowColor   = 'rgba(0,0,0,0.18)'
+        ctx.shadowBlur    = 10
         ctx.shadowOffsetY = 6
-        ctx.drawImage(catImg, drawX, drawY, drawW, drawH)
-        ctx.shadowColor = 'transparent'
-        ctx.shadowBlur = 0
+        ctx.drawImage(flatImg, drawX, drawY, drawW, drawH)
+        ctx.shadowColor   = 'transparent'
+        ctx.shadowBlur    = 0
         ctx.shadowOffsetY = 0
       } else {
-        // Placeholder circle while photo loads
-        const circleY = canvas.height - 80 + bob
+        // Placeholder while loading
+        const bob      = Math.sin(frame * 0.04) * 1.5
+        const circleY  = canvas.height - 80 + bob
         ctx.beginPath()
-        ctx.arc(x, circleY, 40, 0, Math.PI * 2)
-        ctx.fillStyle = 'rgba(99,102,241,0.25)'
+        ctx.arc(posRef.current.x, circleY, 40, 0, Math.PI * 2)
+        ctx.fillStyle   = 'rgba(99,102,241,0.25)'
         ctx.fill()
         ctx.strokeStyle = 'rgba(99,102,241,0.5)'
-        ctx.lineWidth = 2
+        ctx.lineWidth   = 2
         ctx.stroke()
-        ctx.fillStyle = 'rgba(99,102,241,0.7)'
-        ctx.font = '12px sans-serif'
-        ctx.textAlign = 'center'
-        ctx.fillText('Loading…', x, circleY + 5)
+        ctx.fillStyle  = 'rgba(99,102,241,0.7)'
+        ctx.font       = '12px sans-serif'
+        ctx.textAlign  = 'center'
+        ctx.fillText('Loading…', posRef.current.x, circleY + 5)
       }
 
       frame++
@@ -89,16 +126,18 @@ export default function PetView() {
 
     draw()
 
-    // Hit detection — toggle click-through when mouse is over the cat
     function onMouseMove(e: MouseEvent) {
       if (!canvas) return
       const { x } = posRef.current
       const catH = CAT_SCALE
 
-      const catImg2 = catImg
-      if (catImg2 && catImg2.complete && catImg2.naturalWidth > 0) {
-        const aspect = catImg2.naturalWidth / catImg2.naturalHeight
-        const drawW = catH * aspect
+      // Use the first available image (segment or flat) for hit-box geometry
+      const refImg = segments.length > 0
+        ? segments.find(s => s.img.complete && s.img.naturalWidth > 0)?.img
+        : (flatImg && flatImg.complete ? flatImg : null)
+
+      if (refImg && refImg.naturalWidth > 0) {
+        const drawW = catH * (refImg.naturalWidth / refImg.naturalHeight)
         const drawY = canvas.height - catH
         const inBox =
           e.clientX >= x - drawW / 2 &&
@@ -107,7 +146,6 @@ export default function PetView() {
           e.clientY <= drawY + catH
         window.catpet.setCatHover(inBox)
       } else {
-        // Placeholder circle
         const circleY = canvas.height - 80
         const dx = e.clientX - x
         const dy = e.clientY - circleY
@@ -121,7 +159,7 @@ export default function PetView() {
       cancelAnimationFrame(animRef.current)
       window.removeEventListener('mousemove', onMouseMove)
     }
-  }, [primaryPhoto])
+  }, [primaryDataUrl, segments])
 
   return (
     <canvas

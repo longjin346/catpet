@@ -139,6 +139,40 @@ ipcMain.handle('photo:delete', (_e, slot: string) => {
 ipcMain.handle('store:get', (_e, key: string) => store.get(key))
 ipcMain.handle('store:set', (_e, key: string, value: unknown) => { store.set(key, value) })
 
+ipcMain.handle('segments:save', (_e, slot: string, layers: Array<{ id: string; dataUrl: string }>) => {
+  const dir = path.join(PORTABLE_DATA, 'segments', slot)
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  for (const layer of layers) {
+    const base64 = layer.dataUrl.replace(/^data:image\/\w+;base64,/, '')
+    fs.writeFileSync(path.join(dir, `${layer.id}.png`), Buffer.from(base64, 'base64'))
+  }
+})
+
+ipcMain.handle('segments:load', (_e, slot: string) => {
+  const dir = path.join(PORTABLE_DATA, 'segments', slot)
+  if (!fs.existsSync(dir)) return null
+  const result: Record<string, string> = {}
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.png'))
+  if (files.length === 0) return null
+  for (const file of files) {
+    const id = path.basename(file, '.png')
+    result[id] = `data:image/png;base64,${fs.readFileSync(path.join(dir, file)).toString('base64')}`
+  }
+  return result
+})
+
+ipcMain.handle('rig:save', (_e, slot: string, rig: unknown) => {
+  const dir = path.join(PORTABLE_DATA, 'rig')
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, `${slot}.json`), JSON.stringify(rig, null, 2))
+})
+
+ipcMain.handle('rig:load', (_e, slot: string) => {
+  const p = path.join(PORTABLE_DATA, 'rig', `${slot}.json`)
+  if (!fs.existsSync(p)) return null
+  return JSON.parse(fs.readFileSync(p, 'utf8'))
+})
+
 ipcMain.on('cat:ready', () => {
   // Save cat.json marker so next launch skips onboarding
   if (!fs.existsSync(PORTABLE_DATA)) fs.mkdirSync(PORTABLE_DATA, { recursive: true })

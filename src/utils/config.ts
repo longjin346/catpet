@@ -84,3 +84,44 @@ export interface ValidationResult {
   passed: boolean
   issues: ValidationIssue[]
 }
+
+// ─── Puppet rig types (Session 3+) ────────────────────────────────────────────
+
+export interface Point { x: number; y: number }
+
+export type LayerId = 'head' | 'torso' | 'front-legs' | 'rear-legs' | 'tail'
+export type JointId = 'neck' | 'shoulder' | 'hip' | 'tail-base'
+
+/** Draw order: tail is furthest back, head is in front */
+export const LAYER_Z_INDEX: Record<LayerId, number> = {
+  tail: 1,
+  'rear-legs': 2,
+  torso: 3,
+  'front-legs': 4,
+  head: 5,
+}
+
+export interface SegmentLayer {
+  id: LayerId
+  dataUrl: string
+  anchor: Point   // joint/pivot point in image coordinates
+  zIndex: number
+}
+
+export interface RigJoint {
+  id: JointId
+  position: Point
+  rotationRange: [number, number] // degrees, relative to idle pose
+}
+
+/**
+ * Saved alongside segment PNGs in userdata/rig/{slot}.json.
+ * Consumed by the puppet renderer in Session 4.
+ */
+export interface RigDefinition {
+  joints: RigJoint[]
+  headSide: 'left' | 'right'
+  catWidth: number
+  catHeight: number
+  layerAnchors: Record<LayerId, Point>
+}

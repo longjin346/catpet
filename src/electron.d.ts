@@ -22,6 +22,12 @@ declare global {
       catReady(): void
       // Notifications from main to renderer
       onCatLoaded(callback: () => void): () => void
+      // Segment layers (id → PNG data URL)
+      saveSegments(slot: string, layers: Array<{ id: string; dataUrl: string }>): Promise<void>
+      loadSegments(slot: string): Promise<Record<string, string> | null>
+      // Rig definition JSON
+      saveRig(slot: string, rig: unknown): Promise<void>
+      loadRig(slot: string): Promise<unknown | null>
     }
   }
 }

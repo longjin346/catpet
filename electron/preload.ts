@@ -44,4 +44,18 @@ contextBridge.exposeInMainWorld('catpet', {
     ipcRenderer.on('cat:loaded', handler)
     return () => ipcRenderer.removeListener('cat:loaded', handler)
   },
+
+  // Segment layers — PNG files per layer
+  saveSegments: (slot: string, layers: Array<{ id: string; dataUrl: string }>): Promise<void> =>
+    ipcRenderer.invoke('segments:save', slot, layers),
+
+  loadSegments: (slot: string): Promise<Record<string, string> | null> =>
+    ipcRenderer.invoke('segments:load', slot),
+
+  // Rig definition — JSON with joints + layer anchors
+  saveRig: (slot: string, rig: unknown): Promise<void> =>
+    ipcRenderer.invoke('rig:save', slot, rig),
+
+  loadRig: (slot: string): Promise<unknown | null> =>
+    ipcRenderer.invoke('rig:load', slot),
 })

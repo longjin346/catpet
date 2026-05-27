@@ -155,7 +155,7 @@ export default function Upload() {
   const [slots, setSlots] = useState<SlotMap>({})
   const [catName, setCatName] = useState('')
   const [validationIssues, setValidationIssues] = useState<ValidationIssue[]>([])
-  const [saving, setSaving] = useState(false)
+  const [stage, setStage] = useState<null | 'segmenting' | 'launching'>(null)
   const [lastProcessedSlot, setLastProcessedSlot] = useState<SlotRole | null>(null)
 
   const filledSlots = new Set(
@@ -217,7 +217,7 @@ export default function Upload() {
 
   const handleBringToLife = async () => {
     if (filledSlots.size === 0) return
-    setSaving(true)
+    setStage('segmenting')
     try {
       const config = {
         name: catName.trim() || 'Unnamed Cat',
@@ -228,9 +228,27 @@ export default function Upload() {
         updatedAt: Date.now(),
       }
       await window.catpet.storeSet('catConfig', config)
+
+      // Segment primary photo into 5 body-part layers
+      const primaryState = slots.primary
+      if (primaryState?.status === 'done') {
+        try {
+          const { segmentCat } = await import('../processing/body-segmenter')
+          const result = await segmentCat(primaryState.dataUrl)
+          await window.catpet.saveSegments(
+            'primary',
+            result.layers.map(l => ({ id: l.id, dataUrl: l.dataUrl })),
+          )
+          await window.catpet.saveRig('primary', result.rig)
+        } catch {
+          // Segmentation failure is non-fatal — overlay falls back to flat photo
+        }
+      }
+
+      setStage('launching')
       window.catpet.catReady()
-    } finally {
-      setSaving(false)
+    } catch {
+      setStage(null)
     }
   }
 
@@ -313,7 +331,7 @@ export default function Upload() {
         />
         <button
           onClick={handleBringToLife}
-          disabled={!canProceed || saving}
+          disabled={!canProceed || stage !== null}
           style={{
             width: '100%',
             padding: '12px 0',
@@ -327,7 +345,11 @@ export default function Upload() {
             transition: 'background 0.2s',
           }}
         >
-          {saving ? 'Launching…' : `Bring ${catName.trim() || 'My Cat'} to Life!`}
+          {stage === 'segmenting'
+            ? 'Analysing cat…'
+            : stage === 'launching'
+            ? 'Launching…'
+            : `Bring ${catName.trim() || 'My Cat'} to Life!`}
         </button>
         {!canProceed && (
           <p style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', marginTop: 8 }}>
