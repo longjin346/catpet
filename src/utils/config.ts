@@ -123,5 +123,7 @@ export interface RigDefinition {
   headSide: 'left' | 'right'
   catWidth: number
   catHeight: number
+  /** Top-left corner of the cat's bounding box in image coordinates. */
+  bboxOrigin: Point
   layerAnchors: Record<LayerId, Point>
 }

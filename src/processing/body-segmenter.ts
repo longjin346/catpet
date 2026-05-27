@@ -113,8 +113,9 @@ export async function segmentCat(primaryDataUrl: string): Promise<SegmentationRe
   const rig: RigDefinition = {
     joints,
     headSide,
-    catWidth:     bbox.w,
-    catHeight:    bbox.h,
+    catWidth:    bbox.w,
+    catHeight:   bbox.h,
+    bboxOrigin:  { x: bbox.minX, y: bbox.minY },
     layerAnchors,
   }
 

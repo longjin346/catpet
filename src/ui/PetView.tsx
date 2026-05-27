@@ -1,178 +1,152 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
-import { LAYER_Z_INDEX, type LayerId, type RigDefinition } from '../utils/config'
+import { useEffect, useRef, useCallback } from 'react'
+import { Application, ImageSource, Sprite, Texture } from 'pixi.js'
+import { PuppetRig } from '../sprites/PuppetRig'
+import type { RigDefinition } from '../utils/config'
 
-interface SegmentImage {
-  id: LayerId
-  img: HTMLImageElement
-  zIndex: number
-}
+const CAT_X       = 200
+const CAT_HEIGHT  = 150
+const BOTTOM_PAD  = 20
 
 export default function PetView() {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [primaryDataUrl, setPrimaryDataUrl] = useState<string | null>(null)
-  const [segments, setSegments] = useState<SegmentImage[]>([])
-  const posRef = useRef({ x: 200, y: 0 })
-  const animRef = useRef(0)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const appRef       = useRef<Application | null>(null)
+  const rigRef       = useRef<PuppetRig | null>(null)
+  // For the flat-photo fallback (no segments)
+  const flatRef      = useRef<{ sprite: Sprite; basePivotY: number } | null>(null)
 
-  const loadCatData = useCallback(async () => {
-    const photos = await window.catpet.loadPhotos()
-    if (photos.primary) setPrimaryDataUrl(photos.primary)
+  const screenH = useCallback(() => {
+    const app = appRef.current
+    return app ? app.renderer.height / (app.renderer.resolution ?? 1) : window.innerHeight
+  }, [])
 
-    // Try to load segments; fall back silently if none saved yet
-    const rawSegments = await window.catpet.loadSegments('primary')
-    const rawRig = await window.catpet.loadRig('primary') as RigDefinition | null
-
-    if (rawSegments && rawRig) {
-      const layerIds = Object.keys(rawSegments) as LayerId[]
-      const imgs: SegmentImage[] = await Promise.all(
-        layerIds.map(id => new Promise<SegmentImage>(resolve => {
-          const img = new Image()
-          img.onload = () => resolve({ id, img, zIndex: LAYER_Z_INDEX[id] ?? 0 })
-          img.onerror  = () => resolve({ id, img, zIndex: LAYER_Z_INDEX[id] ?? 0 })
-          img.src = rawSegments[id]
-        }))
-      )
-      imgs.sort((a, b) => a.zIndex - b.zIndex)
-      setSegments(imgs)
+  const clearScene = useCallback(() => {
+    rigRef.current?.destroy()
+    rigRef.current = null
+    if (flatRef.current) {
+      flatRef.current.sprite.destroy()
+      flatRef.current = null
     }
   }, [])
 
-  useEffect(() => {
-    loadCatData()
-    const unsubscribe = window.catpet.onCatLoaded(loadCatData)
-    return unsubscribe
-  }, [loadCatData])
+  const loadCatData = useCallback(async () => {
+    const app = appRef.current
+    if (!app) return
 
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    clearScene()
 
-    canvas.width  = window.innerWidth
-    canvas.height = window.innerHeight
+    const h = screenH()
+    const [rawSegments, rawRig] = await Promise.all([
+      window.catpet.loadSegments('primary'),
+      window.catpet.loadRig('primary'),
+    ])
 
-    // Flat fallback image
-    let flatImg: HTMLImageElement | null = null
-    if (primaryDataUrl && segments.length === 0) {
-      flatImg = new Image()
-      flatImg.src = primaryDataUrl
+    if (rawSegments && rawRig) {
+      rigRef.current = await PuppetRig.create(
+        app,
+        rawSegments,
+        rawRig as RigDefinition,
+        CAT_X,
+        h,
+      )
+      return
     }
 
-    const CAT_SCALE = 150
-    let frame = 0
+    // Flat-photo fallback
+    const photos = await window.catpet.loadPhotos()
+    if (!photos.primary) return
 
-    // Compute draw geometry from a source image's natural dimensions
-    function geometry(naturalW: number, naturalH: number) {
-      const aspect = naturalW / naturalH
-      const drawH  = CAT_SCALE
-      const drawW  = drawH * aspect
-      const bob    = Math.sin(frame * 0.04) * 1.5
-      const drawX  = posRef.current.x - drawW / 2
-      const drawY  = canvas!.height - drawH + posRef.current.y + bob
-      return { drawX, drawY, drawW, drawH }
-    }
+    const img = new Image()
+    img.src = photos.primary
+    await img.decode()
+    const texture = new Texture({ source: new ImageSource({ resource: img }) })
+    const sprite  = new Sprite(texture)
 
-    function draw() {
-      if (!ctx || !canvas) return
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
+    const scale   = CAT_HEIGHT / sprite.texture.height
+    const pivotX  = sprite.texture.width / 2
+    const pivotY  = sprite.texture.height
+    sprite.pivot.set(pivotX, pivotY)
+    sprite.scale.set(scale)
+    sprite.position.set(CAT_X, h - BOTTOM_PAD)
 
-      if (segments.length > 0) {
-        // Use the first loaded segment to establish geometry
-        const ref = segments.find(s => s.img.complete && s.img.naturalWidth > 0)
-        if (ref) {
-          const { drawX, drawY, drawW, drawH } = geometry(ref.img.naturalWidth, ref.img.naturalHeight)
-          ctx.shadowColor   = 'rgba(0,0,0,0.18)'
-          ctx.shadowBlur    = 10
-          ctx.shadowOffsetY = 6
-          for (const seg of segments) {
-            if (seg.img.complete && seg.img.naturalWidth > 0) {
-              ctx.drawImage(seg.img, drawX, drawY, drawW, drawH)
-            }
-          }
-          ctx.shadowColor   = 'transparent'
-          ctx.shadowBlur    = 0
-          ctx.shadowOffsetY = 0
+    app.stage.addChild(sprite)
+    flatRef.current = { sprite, basePivotY: h - BOTTOM_PAD }
+  }, [clearScene, screenH])
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    let cancelled = false
+
+    async function init() {
+      const app = new Application()
+      await app.init({
+        backgroundAlpha: 0,
+        width:           window.innerWidth,
+        height:          window.innerHeight,
+        antialias:       true,
+        resolution:      window.devicePixelRatio || 1,
+        autoDensity:     true,
+      })
+
+      if (cancelled) { app.destroy(true); return }
+
+      const cv = app.canvas as HTMLCanvasElement
+      cv.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none'
+      el!.appendChild(cv)
+      appRef.current = app
+
+      await loadCatData()
+
+      app.ticker.add(() => {
+        const t = performance.now() / 1000
+        const breath = Math.sin(t * Math.PI * 2 / 3)
+
+        if (rigRef.current) {
+          rigRef.current.tick()
+        } else if (flatRef.current) {
+          flatRef.current.sprite.y = flatRef.current.basePivotY - breath * 1.5
         }
-      } else if (flatImg && flatImg.complete && flatImg.naturalWidth > 0) {
-        const { drawX, drawY, drawW, drawH } = geometry(flatImg.naturalWidth, flatImg.naturalHeight)
-        ctx.shadowColor   = 'rgba(0,0,0,0.18)'
-        ctx.shadowBlur    = 10
-        ctx.shadowOffsetY = 6
-        ctx.drawImage(flatImg, drawX, drawY, drawW, drawH)
-        ctx.shadowColor   = 'transparent'
-        ctx.shadowBlur    = 0
-        ctx.shadowOffsetY = 0
-      } else {
-        // Placeholder while loading
-        const bob      = Math.sin(frame * 0.04) * 1.5
-        const circleY  = canvas.height - 80 + bob
-        ctx.beginPath()
-        ctx.arc(posRef.current.x, circleY, 40, 0, Math.PI * 2)
-        ctx.fillStyle   = 'rgba(99,102,241,0.25)'
-        ctx.fill()
-        ctx.strokeStyle = 'rgba(99,102,241,0.5)'
-        ctx.lineWidth   = 2
-        ctx.stroke()
-        ctx.fillStyle  = 'rgba(99,102,241,0.7)'
-        ctx.font       = '12px sans-serif'
-        ctx.textAlign  = 'center'
-        ctx.fillText('Loading…', posRef.current.x, circleY + 5)
-      }
-
-      frame++
-      animRef.current = requestAnimationFrame(draw)
+      })
     }
 
-    draw()
+    init()
+
+    const unsubscribe = window.catpet.onCatLoaded(loadCatData)
 
     function onMouseMove(e: MouseEvent) {
-      if (!canvas) return
-      const { x } = posRef.current
-      const catH = CAT_SCALE
-
-      // Use the first available image (segment or flat) for hit-box geometry
-      const refImg = segments.length > 0
-        ? segments.find(s => s.img.complete && s.img.naturalWidth > 0)?.img
-        : (flatImg && flatImg.complete ? flatImg : null)
-
-      if (refImg && refImg.naturalWidth > 0) {
-        const drawW = catH * (refImg.naturalWidth / refImg.naturalHeight)
-        const drawY = canvas.height - catH
-        const inBox =
-          e.clientX >= x - drawW / 2 &&
-          e.clientX <= x + drawW / 2 &&
-          e.clientY >= drawY &&
-          e.clientY <= drawY + catH
-        window.catpet.setCatHover(inBox)
-      } else {
-        const circleY = canvas.height - 80
-        const dx = e.clientX - x
-        const dy = e.clientY - circleY
-        window.catpet.setCatHover(Math.sqrt(dx * dx + dy * dy) < 45)
+      if (rigRef.current) {
+        window.catpet.setCatHover(rigRef.current.hitTest(e.clientX, e.clientY))
+        return
+      }
+      if (flatRef.current) {
+        const sprite = flatRef.current.sprite
+        const hw = (sprite.texture.width  * sprite.scale.x) / 2
+        const h2 = (sprite.texture.height * sprite.scale.y)
+        const px = sprite.x, py = sprite.y
+        window.catpet.setCatHover(
+          e.clientX >= px - hw && e.clientX <= px + hw &&
+          e.clientY >= py - h2 && e.clientY <= py,
+        )
       }
     }
 
     window.addEventListener('mousemove', onMouseMove)
 
     return () => {
-      cancelAnimationFrame(animRef.current)
+      cancelled = true
+      unsubscribe()
       window.removeEventListener('mousemove', onMouseMove)
+      clearScene()
+      appRef.current?.destroy(true)
+      appRef.current = null
     }
-  }, [primaryDataUrl, segments])
+  }, [loadCatData, clearScene])
 
   return (
-    <canvas
-      ref={canvasRef}
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        width: '100vw',
-        height: '100vh',
-        pointerEvents: 'none',
-        background: 'transparent',
-      }}
+    <div
+      ref={containerRef}
+      style={{ position: 'fixed', inset: 0, pointerEvents: 'none' }}
     />
   )
 }
