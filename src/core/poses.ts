@@ -1,6 +1,6 @@
 import type { LayerId } from '../utils/config'
 
-export type PetStateId = 'idle' | 'walking' | 'sleeping' | 'grooming' | 'startled'
+export type PetStateId = 'idle' | 'walking' | 'sleeping' | 'grooming' | 'startled' | 'playing'
 
 export interface LayerPose {
   rotation: number  // radians
@@ -75,5 +75,17 @@ export const POSES: Record<PetStateId, PoseConfig> = {
     },
     breathAmp:    0.0,
     breathPeriod: 3.0,
+  },
+
+  playing: {
+    layers: {
+      head:         { rotation: -0.15, yOffset:  -4, alpha: 1 },
+      torso:        { rotation: -0.05, yOffset:  -2, alpha: 1 },
+      'front-legs': { rotation: -0.28, yOffset:  -5, alpha: 1 },
+      'rear-legs':  { rotation:  0.18, yOffset:   0, alpha: 1 },
+      tail:         { rotation: -0.45, yOffset:  -1, alpha: 1 },
+    },
+    breathAmp:    0.85,
+    breathPeriod: 2.5,
   },
 }

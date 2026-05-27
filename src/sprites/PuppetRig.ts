@@ -9,15 +9,12 @@ import {
 import { LAYER_Z_INDEX, type LayerId, type RigDefinition } from '../utils/config'
 import { POSES, type LayerPose, type PetStateId } from '../core/poses'
 
-/** Target height of the rendered cat on screen, in CSS pixels. */
 const CAT_HEIGHT_PX = 150
 const BOTTOM_PAD    = 20
-/** Lerp speed: ~95 % of the way to target in ~1 second. */
 const LERP_SPEED    = 3.5
-/** Walk speed in px / second. */
 const WALK_SPEED    = 55
-/** How close to walkTarget (px) counts as "arrived". */
 const ARRIVE_THRESH = 8
+const EDGE_PAD      = 40
 
 function lerp(a: number, b: number, dt: number): number {
   return a + (b - a) * Math.min(1, dt * LERP_SPEED)
@@ -33,44 +30,44 @@ async function textureFromDataUrl(dataUrl: string): Promise<Texture> {
 interface LayerEntry {
   id:          LayerId
   sprite:      Sprite
-  /** Sprite's pivot position within catGroup local space, Y component (at load time). */
   localPivotX: number
   localPivotY: number
-  /** Running interpolated pose values. */
   cur:         LayerPose
 }
 
 export class PuppetRig {
-  private catGroup:  Container
-  private shadow:    Graphics
-  private layers:    LayerEntry[] = []
-  private rig:       RigDefinition
-  private scale:     number
-  /** Current screen X of the cat's bottom-center. */
-  private catX:      number
-  private catY:      number
-  /** Target screen X for walking. */
+  private catGroup:    Container
+  private shadow:      Graphics
+  private layers:      LayerEntry[] = []
+  private rig:         RigDefinition
+  private scale:       number
+  private catX:        number
+  private catY:        number
+  private screenW:     number
   private walkTargetX: number | null = null
-  private stateId:   PetStateId = 'idle'
+  private stateId:     PetStateId = 'idle'
+  /** True when the cat is rendered facing the direction opposite to the photo. */
+  private flipped:     boolean = false
 
   private constructor(
     _app: Application,
     rig: RigDefinition,
     catScreenX: number,
     screenH: number,
+    screenW: number,
   ) {
-    this.rig    = rig
-    this.scale  = CAT_HEIGHT_PX / rig.catHeight
-    this.catX   = catScreenX
-    this.catY   = screenH - BOTTOM_PAD
+    this.rig     = rig
+    this.scale   = CAT_HEIGHT_PX / rig.catHeight
+    this.catX    = catScreenX
+    this.catY    = screenH - BOTTOM_PAD
+    this.screenW = screenW
 
     this.catGroup = new Container()
     this.catGroup.position.set(catScreenX, this.catY)
     _app.stage.addChild(this.catGroup)
 
-    // Shadow — drawn at index 0 (behind all sprites)
-    this.shadow = new Graphics()
     const sw = (rig.catWidth * this.scale) * 0.55
+    this.shadow = new Graphics()
     this.shadow.ellipse(0, 4, sw, 7)
     this.shadow.fill({ color: 0x000000, alpha: 0.14 })
     this.catGroup.addChildAt(this.shadow, 0)
@@ -82,14 +79,11 @@ export class PuppetRig {
     rig: RigDefinition,
     catScreenX: number,
     screenH: number,
+    screenW: number,
   ): Promise<PuppetRig> {
-    const puppet = new PuppetRig(app, rig, catScreenX, screenH)
+    const puppet = new PuppetRig(app, rig, catScreenX, screenH, screenW)
     const { bboxOrigin, catWidth, catHeight } = rig
     const s = puppet.scale
-
-    // catGroup origin = cat's bottom-center on screen
-    // sprite local x = (anchorX - (bboxOrigin.x + catWidth/2)) * scale
-    // sprite local y = (anchorY - (bboxOrigin.y + catHeight)) * scale
 
     const sortedIds = (Object.keys(segments) as LayerId[])
       .sort((a, b) => (LAYER_Z_INDEX[a] ?? 0) - (LAYER_Z_INDEX[b] ?? 0))
@@ -108,8 +102,7 @@ export class PuppetRig {
 
       puppet.catGroup.addChild(sprite)
       puppet.layers.push({
-        id,
-        sprite,
+        id, sprite,
         localPivotX: localX,
         localPivotY: localY,
         cur: { rotation: 0, yOffset: 0, alpha: 1 },
@@ -119,21 +112,18 @@ export class PuppetRig {
     return puppet
   }
 
-  /** Notify the rig of the current FSM state; poses will lerp toward it. */
   setState(id: PetStateId): void {
     this.stateId = id
   }
 
-  /** Begin walking toward this screen-X. Call setState('walking') beforehand. */
   setWalkTarget(x: number): void {
-    this.walkTargetX = x
+    this.walkTargetX = Math.max(EDGE_PAD, Math.min(this.screenW - EDGE_PAD, x))
   }
 
-  /**
-   * Main update — call from PixiJS ticker.
-   * @param deltaMs  milliseconds since last frame
-   * @returns  'arrived' when the cat reaches its walk target, undefined otherwise
-   */
+  set visible(v: boolean) {
+    this.catGroup.visible = v
+  }
+
   tick(deltaMs: number): 'arrived' | undefined {
     if (this.layers.length === 0) return
 
@@ -142,61 +132,65 @@ export class PuppetRig {
     const pose = POSES[this.stateId]
 
     // ── Breathing oscillation ────────────────────────────────────────────────
-    const breathPhase = t * Math.PI * 2 / pose.breathPeriod
-    const breath      = Math.sin(breathPhase) * pose.breathAmp
-    const bob         = breath * 1.5        // shared vertical bob (px)
-    const headBreath  = breath * 0.025
-    const tailBreath  = Math.sin(t * Math.PI * 2 / 4 + 1.1) * pose.breathAmp * 0.1
+    const breath     = Math.sin(t * Math.PI * 2 / pose.breathPeriod) * pose.breathAmp
+    const bob        = breath * 1.5
+    const headBreath = breath * 0.025
+    const tailBreath = Math.sin(t * Math.PI * 2 / 4 + 1.1) * pose.breathAmp * 0.10
 
     // ── Walk cycle overlay ───────────────────────────────────────────────────
-    const isWalking    = this.stateId === 'walking'
-    const walkCycle    = isWalking ? Math.sin(t * Math.PI * 4) * 0.25 : 0
+    const isWalking = this.stateId === 'walking'
+    const walkCycle = isWalking ? Math.sin(t * Math.PI * 4) * 0.25 : 0
 
-    // ── Walking position ─────────────────────────────────────────────────────
+    // ── Walking position + directional flip ─────────────────────────────────
     let arrived = false
     if (isWalking && this.walkTargetX !== null) {
       const dx   = this.walkTargetX - this.catX
       const dist = Math.abs(dx)
+
+      // Set facing direction based on walk direction
+      const walkingLeft = dx < 0
+      const shouldFlip  = (walkingLeft && this.rig.headSide === 'right') ||
+                          (!walkingLeft && this.rig.headSide === 'left')
+      if (shouldFlip !== this.flipped) {
+        this.flipped          = shouldFlip
+        this.catGroup.scale.x = shouldFlip ? -1 : 1
+      }
+
       if (dist <= ARRIVE_THRESH) {
-        this.catX       = this.walkTargetX
+        this.catX        = this.walkTargetX
         this.walkTargetX = null
-        arrived         = true
+        arrived          = true
       } else {
         this.catX += Math.sign(dx) * Math.min(WALK_SPEED * dt, dist)
       }
     }
 
-    // ── Apply position to container ──────────────────────────────────────────
-    this.catGroup.x = this.catX
+    // Clamp to screen edges
+    this.catX = Math.max(EDGE_PAD, Math.min(this.screenW - EDGE_PAD, this.catX))
 
-    // ── Shadow ──────────────────────────────────────────────────────────────
+    this.catGroup.x            = this.catX
     this.shadow.scale.set(1 - bob * 0.005, 1)
 
-    // ── Per-layer interpolation + animation ─────────────────────────────────
+    // ── Per-layer lerp + animation ───────────────────────────────────────────
     for (const layer of this.layers) {
       const target = pose.layers[layer.id]
 
       layer.cur.rotation = lerp(layer.cur.rotation, target.rotation, dt)
       layer.cur.yOffset  = lerp(layer.cur.yOffset,  target.yOffset,  dt)
-      layer.cur.alpha    = lerp(layer.cur.alpha,    target.alpha,    dt)
+      layer.cur.alpha    = lerp(layer.cur.alpha,     target.alpha,    dt)
 
       let rotation = layer.cur.rotation
       let yOffset  = layer.cur.yOffset + bob
 
-      // Breathing + walk cycle overlays
       switch (layer.id) {
         case 'head':
-          rotation += headBreath
-          break
+          rotation += headBreath; break
         case 'tail':
-          rotation += tailBreath
-          break
+          rotation += tailBreath; break
         case 'front-legs':
-          rotation += walkCycle
-          break
+          rotation += walkCycle; break
         case 'rear-legs':
-          rotation -= walkCycle
-          break
+          rotation -= walkCycle; break
       }
 
       layer.sprite.rotation = rotation
@@ -207,7 +201,6 @@ export class PuppetRig {
     return arrived ? 'arrived' : undefined
   }
 
-  /** Returns true when the screen point is inside the cat's bounding box. */
   hitTest(screenX: number, screenY: number): boolean {
     const hw  = (this.rig.catWidth  * this.scale) / 2
     const top = this.catY - this.rig.catHeight * this.scale

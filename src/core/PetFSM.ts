@@ -26,11 +26,13 @@ export const petMachine = setup({
     WALK_TIMEOUT:    () => 8000  + Math.random() * 4000,
     SLEEP_TIMEOUT:   () => 18000 + Math.random() * 14000,
     GROOM_TIMEOUT:   () => 6000  + Math.random() * 6000,
+    PLAY_TIMEOUT:    () => 8000  + Math.random() * 6000,
     STARTLE_TIMEOUT: 700,
   },
 
   guards: {
     shouldWalk:  () => Math.random() < 0.40,
+    shouldPlay:  () => Math.random() < 0.30,
     shouldSleep: () => Math.random() < 0.35,
     shouldGroom: () => Math.random() < 0.45,
   },
@@ -64,6 +66,7 @@ export const petMachine = setup({
     choosingAction: {
       always: [
         { target: 'walking',  guard: 'shouldWalk',  actions: 'pickWalkTarget' },
+        { target: 'playing',  guard: 'shouldPlay'  },
         { target: 'sleeping', guard: 'shouldSleep' },
         { target: 'grooming', guard: 'shouldGroom' },
         { target: 'idle' },
@@ -81,6 +84,10 @@ export const petMachine = setup({
 
     grooming: {
       after: { GROOM_TIMEOUT: 'idle' },
+    },
+
+    playing: {
+      after: { PLAY_TIMEOUT: 'idle' },
     },
 
     startled: {
