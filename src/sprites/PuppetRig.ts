@@ -7,15 +7,20 @@ import {
   Texture,
 } from 'pixi.js'
 import { LAYER_Z_INDEX, type LayerId, type RigDefinition } from '../utils/config'
+import { POSES, type LayerPose, type PetStateId } from '../core/poses'
 
 /** Target height of the rendered cat on screen, in CSS pixels. */
 const CAT_HEIGHT_PX = 150
+const BOTTOM_PAD    = 20
+/** Lerp speed: ~95 % of the way to target in ~1 second. */
+const LERP_SPEED    = 3.5
+/** Walk speed in px / second. */
+const WALK_SPEED    = 55
+/** How close to walkTarget (px) counts as "arrived". */
+const ARRIVE_THRESH = 8
 
-interface LayerEntry {
-  id: LayerId
-  sprite: Sprite
-  /** Sprite's pivot screen-Y at the frame it was placed — used for breathing offset. */
-  basePivotY: number
+function lerp(a: number, b: number, dt: number): number {
+  return a + (b - a) * Math.min(1, dt * LERP_SPEED)
 }
 
 async function textureFromDataUrl(dataUrl: string): Promise<Texture> {
@@ -25,14 +30,28 @@ async function textureFromDataUrl(dataUrl: string): Promise<Texture> {
   return new Texture({ source: new ImageSource({ resource: img }) })
 }
 
+interface LayerEntry {
+  id:          LayerId
+  sprite:      Sprite
+  /** Sprite's pivot position within catGroup local space, Y component (at load time). */
+  localPivotX: number
+  localPivotY: number
+  /** Running interpolated pose values. */
+  cur:         LayerPose
+}
+
 export class PuppetRig {
-  private container: Container
-  private shadow: Graphics
-  private layers: LayerEntry[] = []
-  private rig: RigDefinition
-  private scale: number
-  private basePivotX: number  // screen-X of the cat's center (fixed)
-  private basePivotY: number  // screen-Y of the cat's bottom (fixed)
+  private catGroup:  Container
+  private shadow:    Graphics
+  private layers:    LayerEntry[] = []
+  private rig:       RigDefinition
+  private scale:     number
+  /** Current screen X of the cat's bottom-center. */
+  private catX:      number
+  private catY:      number
+  /** Target screen X for walking. */
+  private walkTargetX: number | null = null
+  private stateId:   PetStateId = 'idle'
 
   private constructor(
     _app: Application,
@@ -40,24 +59,23 @@ export class PuppetRig {
     catScreenX: number,
     screenH: number,
   ) {
-    this.rig = rig
-    this.scale      = CAT_HEIGHT_PX / rig.catHeight
-    this.basePivotX = catScreenX
-    this.basePivotY = screenH - 20
+    this.rig    = rig
+    this.scale  = CAT_HEIGHT_PX / rig.catHeight
+    this.catX   = catScreenX
+    this.catY   = screenH - BOTTOM_PAD
 
-    this.container = new Container()
-    _app.stage.addChild(this.container)
+    this.catGroup = new Container()
+    this.catGroup.position.set(catScreenX, this.catY)
+    _app.stage.addChild(this.catGroup)
 
-    // Shadow ellipse drawn behind every layer
+    // Shadow — drawn at index 0 (behind all sprites)
     this.shadow = new Graphics()
     const sw = (rig.catWidth * this.scale) * 0.55
-    this.shadow.ellipse(0, 0, sw, 7)
+    this.shadow.ellipse(0, 4, sw, 7)
     this.shadow.fill({ color: 0x000000, alpha: 0.14 })
-    this.shadow.position.set(catScreenX, screenH - 20)
-    this.container.addChildAt(this.shadow, 0)
+    this.catGroup.addChildAt(this.shadow, 0)
   }
 
-  /** Factory — loads all textures asynchronously before returning. */
   static async create(
     app: Application,
     segments: Record<string, string>,
@@ -66,103 +84,145 @@ export class PuppetRig {
     screenH: number,
   ): Promise<PuppetRig> {
     const puppet = new PuppetRig(app, rig, catScreenX, screenH)
+    const { bboxOrigin, catWidth, catHeight } = rig
+    const s = puppet.scale
 
-    // Sort layer IDs by z-index so addChild order is correct
+    // catGroup origin = cat's bottom-center on screen
+    // sprite local x = (anchorX - (bboxOrigin.x + catWidth/2)) * scale
+    // sprite local y = (anchorY - (bboxOrigin.y + catHeight)) * scale
+
     const sortedIds = (Object.keys(segments) as LayerId[])
       .sort((a, b) => (LAYER_Z_INDEX[a] ?? 0) - (LAYER_Z_INDEX[b] ?? 0))
 
     for (const id of sortedIds) {
       const texture = await textureFromDataUrl(segments[id])
       const sprite  = new Sprite(texture)
-      const anchor  = rig.layerAnchors[id]
+      const anchor  = rig.layerAnchors[id] ?? { x: bboxOrigin.x + catWidth / 2, y: bboxOrigin.y + catHeight }
 
-      if (anchor) {
-        sprite.pivot.set(anchor.x, anchor.y)
-      }
+      sprite.pivot.set(anchor.x, anchor.y)
+      sprite.scale.set(s)
 
-      const { screenX, screenY } = puppet.pivotScreenPos(anchor)
-      sprite.position.set(screenX, screenY)
-      sprite.scale.set(puppet.scale)
+      const localX = (anchor.x - bboxOrigin.x - catWidth  / 2) * s
+      const localY = (anchor.y - bboxOrigin.y - catHeight)     * s
+      sprite.position.set(localX, localY)
 
-      puppet.container.addChild(sprite)
-      puppet.layers.push({ id, sprite, basePivotY: screenY })
+      puppet.catGroup.addChild(sprite)
+      puppet.layers.push({
+        id,
+        sprite,
+        localPivotX: localX,
+        localPivotY: localY,
+        cur: { rotation: 0, yOffset: 0, alpha: 1 },
+      })
     }
 
     return puppet
   }
 
-  /**
-   * Convert an anchor point (image-space) to the screen position of that pivot.
-   * All layer sprites share the same image origin so the formula is the same for all.
-   */
-  private pivotScreenPos(anchor: { x: number; y: number } | undefined): { screenX: number; screenY: number } {
-    const { bboxOrigin, catWidth, catHeight } = this.rig
-    const s = this.scale
-    // Top-left of the full sprite in screen space (bottom-center of bbox → targetY)
-    const spriteLeft = this.basePivotX - (bboxOrigin.x + catWidth  / 2) * s
-    const spriteTop  = this.basePivotY - (bboxOrigin.y + catHeight)     * s
-
-    if (!anchor) return { screenX: spriteLeft, screenY: spriteTop }
-    return {
-      screenX: spriteLeft + anchor.x * s,
-      screenY: spriteTop  + anchor.y * s,
-    }
+  /** Notify the rig of the current FSM state; poses will lerp toward it. */
+  setState(id: PetStateId): void {
+    this.stateId = id
   }
 
-  /** Call every frame from the PixiJS ticker. */
-  tick(): void {
+  /** Begin walking toward this screen-X. Call setState('walking') beforehand. */
+  setWalkTarget(x: number): void {
+    this.walkTargetX = x
+  }
+
+  /**
+   * Main update — call from PixiJS ticker.
+   * @param deltaMs  milliseconds since last frame
+   * @returns  'arrived' when the cat reaches its walk target, undefined otherwise
+   */
+  tick(deltaMs: number): 'arrived' | undefined {
     if (this.layers.length === 0) return
 
-    const t = performance.now() / 1000
-    // Primary breathing cycle ~3 s
-    const breath   = Math.sin(t * Math.PI * 2 / 3)
-    // Tail sway is slower and phase-shifted
-    const tailSway = Math.sin(t * Math.PI * 2 / 4 + 1.1)
-    const bob      = breath * 1.5  // ±1.5 px vertical
+    const dt   = deltaMs / 1000
+    const t    = performance.now() / 1000
+    const pose = POSES[this.stateId]
 
-    for (const { id, sprite, basePivotY } of this.layers) {
-      sprite.y = basePivotY - bob
+    // ── Breathing oscillation ────────────────────────────────────────────────
+    const breathPhase = t * Math.PI * 2 / pose.breathPeriod
+    const breath      = Math.sin(breathPhase) * pose.breathAmp
+    const bob         = breath * 1.5        // shared vertical bob (px)
+    const headBreath  = breath * 0.025
+    const tailBreath  = Math.sin(t * Math.PI * 2 / 4 + 1.1) * pose.breathAmp * 0.1
 
-      switch (id) {
-        case 'head':
-          sprite.rotation = breath * 0.025
-          break
-        case 'tail':
-          sprite.rotation = tailSway * 0.10
-          break
-        case 'front-legs':
-          sprite.rotation = breath * 0.020
-          break
-        case 'rear-legs':
-          sprite.rotation = breath * 0.015
-          break
+    // ── Walk cycle overlay ───────────────────────────────────────────────────
+    const isWalking    = this.stateId === 'walking'
+    const walkCycle    = isWalking ? Math.sin(t * Math.PI * 4) * 0.25 : 0
+
+    // ── Walking position ─────────────────────────────────────────────────────
+    let arrived = false
+    if (isWalking && this.walkTargetX !== null) {
+      const dx   = this.walkTargetX - this.catX
+      const dist = Math.abs(dx)
+      if (dist <= ARRIVE_THRESH) {
+        this.catX       = this.walkTargetX
+        this.walkTargetX = null
+        arrived         = true
+      } else {
+        this.catX += Math.sign(dx) * Math.min(WALK_SPEED * dt, dist)
       }
     }
 
-    // Shadow gently scales with the bob (cat rises → shadow shrinks slightly)
-    const shadowScale = 1 - bob * 0.005
-    this.shadow.scale.set(shadowScale, 1)
+    // ── Apply position to container ──────────────────────────────────────────
+    this.catGroup.x = this.catX
+
+    // ── Shadow ──────────────────────────────────────────────────────────────
+    this.shadow.scale.set(1 - bob * 0.005, 1)
+
+    // ── Per-layer interpolation + animation ─────────────────────────────────
+    for (const layer of this.layers) {
+      const target = pose.layers[layer.id]
+
+      layer.cur.rotation = lerp(layer.cur.rotation, target.rotation, dt)
+      layer.cur.yOffset  = lerp(layer.cur.yOffset,  target.yOffset,  dt)
+      layer.cur.alpha    = lerp(layer.cur.alpha,    target.alpha,    dt)
+
+      let rotation = layer.cur.rotation
+      let yOffset  = layer.cur.yOffset + bob
+
+      // Breathing + walk cycle overlays
+      switch (layer.id) {
+        case 'head':
+          rotation += headBreath
+          break
+        case 'tail':
+          rotation += tailBreath
+          break
+        case 'front-legs':
+          rotation += walkCycle
+          break
+        case 'rear-legs':
+          rotation -= walkCycle
+          break
+      }
+
+      layer.sprite.rotation = rotation
+      layer.sprite.y        = layer.localPivotY + yOffset
+      layer.sprite.alpha    = layer.cur.alpha
+    }
+
+    return arrived ? 'arrived' : undefined
   }
 
   /** Returns true when the screen point is inside the cat's bounding box. */
   hitTest(screenX: number, screenY: number): boolean {
-    const { catWidth, catHeight } = this.rig
-    const halfW = (catWidth  * this.scale) / 2
-    const top   = this.basePivotY - catHeight * this.scale
+    const hw  = (this.rig.catWidth  * this.scale) / 2
+    const top = this.catY - this.rig.catHeight * this.scale
     return (
-      screenX >= this.basePivotX - halfW &&
-      screenX <= this.basePivotX + halfW &&
+      screenX >= this.catX - hw &&
+      screenX <= this.catX + hw &&
       screenY >= top &&
-      screenY <= this.basePivotY
+      screenY <= this.catY
     )
   }
 
   destroy(): void {
-    this.container.destroy({ children: true, texture: true })
+    this.catGroup.destroy({ children: true, texture: true })
     this.layers = []
   }
 
-  get catWidthPx(): number {
-    return this.rig.catWidth * this.scale
-  }
+  get x(): number { return this.catX }
 }

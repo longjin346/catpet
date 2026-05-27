@@ -1,23 +1,23 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { Application, ImageSource, Sprite, Texture } from 'pixi.js'
+import { createActor } from 'xstate'
 import { PuppetRig } from '../sprites/PuppetRig'
+import { petMachine } from '../core/PetFSM'
 import type { RigDefinition } from '../utils/config'
 
-const CAT_X       = 200
+const CAT_X_START = 200
 const CAT_HEIGHT  = 150
 const BOTTOM_PAD  = 20
+
+// px/s of sudden mouse movement that triggers a startle
+const STARTLE_SPEED = 900
 
 export default function PetView() {
   const containerRef = useRef<HTMLDivElement>(null)
   const appRef       = useRef<Application | null>(null)
   const rigRef       = useRef<PuppetRig | null>(null)
-  // For the flat-photo fallback (no segments)
   const flatRef      = useRef<{ sprite: Sprite; basePivotY: number } | null>(null)
-
-  const screenH = useCallback(() => {
-    const app = appRef.current
-    return app ? app.renderer.height / (app.renderer.resolution ?? 1) : window.innerHeight
-  }, [])
+  const actorRef     = useRef<ReturnType<typeof createActor<typeof petMachine>> | null>(null)
 
   const clearScene = useCallback(() => {
     rigRef.current?.destroy()
@@ -26,6 +26,11 @@ export default function PetView() {
       flatRef.current.sprite.destroy()
       flatRef.current = null
     }
+  }, [])
+
+  const screenH = useCallback(() => {
+    const app = appRef.current
+    return app ? app.renderer.height / (app.renderer.resolution ?? 1) : window.innerHeight
   }, [])
 
   const loadCatData = useCallback(async () => {
@@ -45,13 +50,18 @@ export default function PetView() {
         app,
         rawSegments,
         rawRig as RigDefinition,
-        CAT_X,
+        CAT_X_START,
         h,
       )
+      // Start FSM (or restart it if already running)
+      actorRef.current?.stop()
+      const actor = createActor(petMachine, { input: { screenW: window.innerWidth } })
+      actor.start()
+      actorRef.current = actor
       return
     }
 
-    // Flat-photo fallback
+    // Flat-photo fallback (no segments yet)
     const photos = await window.catpet.loadPhotos()
     if (!photos.primary) return
 
@@ -60,14 +70,10 @@ export default function PetView() {
     await img.decode()
     const texture = new Texture({ source: new ImageSource({ resource: img }) })
     const sprite  = new Sprite(texture)
-
     const scale   = CAT_HEIGHT / sprite.texture.height
-    const pivotX  = sprite.texture.width / 2
-    const pivotY  = sprite.texture.height
-    sprite.pivot.set(pivotX, pivotY)
+    sprite.pivot.set(sprite.texture.width / 2, sprite.texture.height)
     sprite.scale.set(scale)
-    sprite.position.set(CAT_X, h - BOTTOM_PAD)
-
+    sprite.position.set(CAT_X_START, h - BOTTOM_PAD)
     app.stage.addChild(sprite)
     flatRef.current = { sprite, basePivotY: h - BOTTOM_PAD }
   }, [clearScene, screenH])
@@ -88,7 +94,6 @@ export default function PetView() {
         resolution:      window.devicePixelRatio || 1,
         autoDensity:     true,
       })
-
       if (cancelled) { app.destroy(true); return }
 
       const cv = app.canvas as HTMLCanvasElement
@@ -98,14 +103,35 @@ export default function PetView() {
 
       await loadCatData()
 
-      app.ticker.add(() => {
-        const t = performance.now() / 1000
-        const breath = Math.sin(t * Math.PI * 2 / 3)
+      // ── Ticker ──────────────────────────────────────────────────────────────
+      app.ticker.add(ticker => {
+        const actor = actorRef.current
+        const rig   = rigRef.current
 
-        if (rigRef.current) {
-          rigRef.current.tick()
+        if (rig && actor) {
+          const snap      = actor.getSnapshot()
+          const stateVal  = snap.value as string
+
+          // Keep rig's state ID in sync
+          const knownStates = ['idle', 'walking', 'sleeping', 'grooming', 'startled'] as const
+          const sid = knownStates.find(s => s === stateVal) ?? 'idle'
+          rig.setState(sid)
+
+          // When FSM enters walking, update the walk target
+          if (sid === 'walking') {
+            rig.setWalkTarget(snap.context.walkTargetX)
+          }
+
+          const result = rig.tick(ticker.deltaMS)
+          if (result === 'arrived') {
+            actor.send({ type: 'ARRIVED' })
+          }
+
         } else if (flatRef.current) {
-          flatRef.current.sprite.y = flatRef.current.basePivotY - breath * 1.5
+          // Simple breathing bob for flat-photo fallback
+          const t      = performance.now() / 1000
+          const breath = Math.sin(t * Math.PI * 2 / 3) * 1.5
+          flatRef.current.sprite.y = flatRef.current.basePivotY - breath
         }
       })
     }
@@ -114,19 +140,42 @@ export default function PetView() {
 
     const unsubscribe = window.catpet.onCatLoaded(loadCatData)
 
+    // ── Mouse move: hit detection + startle ─────────────────────────────────
+    let lastMouseX = 0, lastMouseY = 0, lastMouseT = 0
+
     function onMouseMove(e: MouseEvent) {
-      if (rigRef.current) {
-        window.catpet.setCatHover(rigRef.current.hitTest(e.clientX, e.clientY))
+      const now = performance.now()
+      const dt  = (now - lastMouseT) / 1000
+      if (dt > 0) {
+        const dx    = e.clientX - lastMouseX
+        const dy    = e.clientY - lastMouseY
+        const speed = Math.sqrt(dx * dx + dy * dy) / dt
+
+        // Startle if cursor is near cat and moving fast
+        if (speed > STARTLE_SPEED) {
+          const rig = rigRef.current
+          if (rig?.hitTest(e.clientX, e.clientY)) {
+            actorRef.current?.send({ type: 'STARTLE' })
+          }
+        }
+      }
+      lastMouseX = e.clientX
+      lastMouseY = e.clientY
+      lastMouseT = now
+
+      // Click-through toggle
+      const rig = rigRef.current
+      if (rig) {
+        window.catpet.setCatHover(rig.hitTest(e.clientX, e.clientY))
         return
       }
       if (flatRef.current) {
-        const sprite = flatRef.current.sprite
-        const hw = (sprite.texture.width  * sprite.scale.x) / 2
-        const h2 = (sprite.texture.height * sprite.scale.y)
-        const px = sprite.x, py = sprite.y
+        const s  = flatRef.current.sprite
+        const hw = (s.texture.width  * s.scale.x) / 2
+        const h2 = (s.texture.height * s.scale.y)
         window.catpet.setCatHover(
-          e.clientX >= px - hw && e.clientX <= px + hw &&
-          e.clientY >= py - h2 && e.clientY <= py,
+          e.clientX >= s.x - hw && e.clientX <= s.x + hw &&
+          e.clientY >= s.y - h2 && e.clientY <= s.y,
         )
       }
     }
@@ -137,6 +186,8 @@ export default function PetView() {
       cancelled = true
       unsubscribe()
       window.removeEventListener('mousemove', onMouseMove)
+      actorRef.current?.stop()
+      actorRef.current = null
       clearScene()
       appRef.current?.destroy(true)
       appRef.current = null
