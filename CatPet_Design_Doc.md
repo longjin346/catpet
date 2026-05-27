@@ -105,7 +105,7 @@ interface PhotoAnalysis {
 }
 ```
 
-This can be powered by Claude Vision API (analyze the photo and return structured JSON) or a lighter-weight local classifier. If the user uploads a sleeping photo into the "Side" slot, the system gently suggests: *"This looks like a great sleep photo — want to move it to the Sleep slot instead?"*
+This is powered by a local ONNX image classifier (e.g., MobileNet-based cat pose estimator) bundled with the app — no API calls, fully offline. If the user uploads a sleeping photo into the "Side" slot, the system gently suggests: *"This looks like a great sleep photo — want to move it to the Sleep slot instead?"*
 
 #### Sprite Source Priority
 
@@ -173,13 +173,12 @@ The pet operates as a **finite state machine (FSM)** with these core states:
 
 | Layer              | Technology                    | Rationale                                               |
 |--------------------|-------------------------------|---------------------------------------------------------|
-| **Runtime**        | Electron 30+                  | Desktop overlay with transparent, click-through window  |
+| **Runtime**        | Electron 31                   | Desktop overlay with transparent, click-through window  |
 | **Renderer**       | HTML5 Canvas + PixiJS         | Hardware-accelerated 2D with sprite mesh deformation    |
 | **UI Framework**   | React 18 (settings panel)     | Settings/upload UI; pet canvas is raw PixiJS            |
-| **Background Removal** | `@imgly/background-removal-node` | Runs locally, no API dependency, ONNX-based     |
-| **Segmentation**   | MediaPipe / ONNX Runtime      | Segment cat photo into body parts (head, torso, legs, tail) for puppet rigging |
+| **Background Removal** | `@imgly/background-removal` (WASM) | Runs in renderer via ONNX WebAssembly — no native module, no network, fully offline |
+| **Segmentation**   | ONNX Runtime Web (WASM, local) | Body-part segmentation; model bundled in app (~15MB int8), runs fully offline |
 | **Image Processing** | Sharp + Canvas API          | Crop, resize, layer compositing, alpha edge refinement  |
-| **AI Analysis**    | Anthropic API (Claude Vision) | Analyze cat orientation; identify body part boundaries; generate segmentation hints |
 | **Puppet Engine**  | Custom (Canvas 2D transforms) | Per-segment transform chains: rotate, translate, mesh warp for natural motion |
 | **State Machine**  | XState v5                     | Robust FSM with timers, guards, and visual debugging    |
 | **Build**          | Vite + electron-builder       | Fast dev, self-contained portable packaging             |
@@ -205,7 +204,7 @@ catpet/
 │   │   ├── animator.ts      # Frame sequencing: interpolate between pose keyframes
 │   │   └── overlays.ts      # Particle effects: Zzz, hearts, !, sweat drops
 │   ├── processing/
-│   │   ├── background-removal.ts  # @imgly/background-removal-node wrapper
+│   │   ├── background-removal.ts  # @imgly/background-removal (WASM) — runs in renderer, fully offline
 │   │   ├── cat-analyzer.ts        # Detect orientation, pose, color palette per photo
 │   │   ├── body-segmenter.ts      # Segment isolated cat into head/torso/legs/tail layers
 │   │   ├── photo-router.ts        # Assign photos to roles, pick best source per state
@@ -362,9 +361,9 @@ The cat photo is split into 5–7 independently movable layers, each with feathe
 
 **Segmentation approach (in priority order):**
 
-1. **Claude Vision API** (best): Send the isolated cat photo to Claude with a structured prompt: *"Identify the pixel boundaries of this cat's head, torso, front legs, rear legs, and tail. Return bounding polygons as coordinate arrays."* Parse the response into clipping masks. This gives the most accurate segmentation because it understands cat anatomy.
+1. **Local ONNX pose estimation model** (primary): Run a bundled animal pose estimation model (e.g., DeepLabV3 or a fine-tuned segmentation model) that labels body part regions directly. Runs fully offline, no API key, no network needed. Accuracy is good for side-view cats and sufficient for front-view.
 
-2. **ONNX animal segmentation model** (offline fallback): Run a local segmentation model that labels body part regions. Less precise but works without network.
+2. **ONNX animal segmentation model** (secondary): A complementary segmentation model that provides region masks. Used to refine boundaries from the pose estimator, especially around tail and ear edges.
 
 3. **Generic fallback masks** (last resort): Pre-built segmentation templates (`assets/masks/side-segments.png`) — a labeled region map for a "generic cat shape" in side view. The system warps this mask to roughly fit the uploaded cat's proportions using key-point alignment. Least accurate, but guarantees the pipeline always produces output.
 
@@ -602,7 +601,7 @@ const catPetMachine = createMachine({
 ### Phase 2 — Puppet Rig & State Machine (Week 2)
 **Goal:** Cat photo segmented into body parts, basic puppet movement working
 
-- [ ] Implement body segmentation (Claude Vision API → fallback masks)
+- [ ] Implement body segmentation (local ONNX pose estimation → fallback masks)
 - [ ] Build puppet rig: joint system, layer z-ordering, pivot points
 - [ ] Feathered alpha edges + overlap zones for seamless segment blending
 - [ ] Implement XState state machine with all 8 states
@@ -649,7 +648,7 @@ const catPetMachine = createMachine({
 | Distribution | Self-contained portable zip (`dir` target) | NSIS installer | Zero-install: extract and run. Friends don't need admin rights, no VC++ install, nothing touches the registry. User data stored relative to app folder |
 | Animation approach | **2D skeletal puppet rig** (photo segments + joints) | Cartoon SVG templates / AI image generation | Preserves 100% photographic fidelity — every pixel is real fur. No cartoonification, no style inconsistency. Puppet approach is proven (Spine, Live2D, Character Animator) |
 | Rendering | PixiJS | Raw Canvas 2D | Puppet rig needs per-layer transforms at 60fps; PixiJS gives hardware-accelerated sprite batching, mesh deformation, and blend modes for segment overlap |
-| Segmentation | Claude Vision API → ONNX fallback → static masks | Manual user annotation | Claude Vision understands cat anatomy and can return precise body-part polygons. Fallback chain ensures offline users still get results |
+| Segmentation | Local ONNX pose estimation + fallback masks | Claude Vision API / cloud services | Fully offline, no API key, no cost. Users just extract and run. ONNX model bundled in the zip (~15MB quantized) |
 | State machine | XState v5 | Custom FSM | Visual inspector for debugging, built-in timer support, well-typed |
 | Background removal | @imgly/background-removal-node | remove.bg API | Runs offline, no API key, free, bundled as native ONNX module inside the zip |
 | User data location | `./userdata/` (relative to exe) | `%APPDATA%` | Portable-friendly — everything travels with the folder, nothing left behind on the host machine |
@@ -664,7 +663,7 @@ const catPetMachine = createMachine({
 | Cat photo at unusual angle (top-down, extreme close-up) | Poor segmentation, joints misaligned | Onboarding photo guide with silhouette overlay; validation rejects bad angles with helpful re-take tips |
 | Background removal fails on complex fur (long-hair cats) | Jagged edges, artifacts | Feathered alpha edge (3–5px Gaussian) + fur fringe synthesis on silhouette |
 | Puppet segment seams visible at joints | "Paper doll" cut-out look | 15px overlap zones with blended alpha between adjacent layers; subtle shadow under head layer |
-| Segmentation model misidentifies body parts | Legs/tail confused, wrong joints | Claude Vision API as primary (high accuracy); ONNX fallback; user can manually adjust joint positions in Settings |
+| Segmentation model misidentifies body parts | Legs/tail confused, wrong joints | ONNX model as primary; generic fallback masks as safety net; user can manually adjust joint positions in Settings |
 | Puppet motion looks robotic | Unnatural, stiff movement | Ease-in-out interpolation, subtle secondary motion (tail lag, ear twitch), keep all rotations within ±30° of natural range |
 | ONNX native module fails on user's machine | App won't process photos | Bundle pre-built binaries for win-x64; include WASM fallback for edge cases; clear error message with "send us a report" option |
 | Electron memory usage | ~150–200MB baseline | Lazy-load settings panel; keep canvas small; use OffscreenCanvas for segmentation |
@@ -686,10 +685,11 @@ Session 2: "Build the multi-photo upload wizard with guided slots, photo
             validation (cat detection, blur/dark checks), background removal
             preview, and quality meter. Integrate @imgly/background-removal-node."
 
-Session 3: "Implement body segmentation: send isolated cat to Claude Vision
-            API to get body part polygons. Build fallback to generic mask
-            templates. Output: 5 layers (head, torso, front-legs, rear-legs,
-            tail) each with alpha-feathered edges and overlap zones."
+Session 3: "Implement body segmentation: use a local ONNX animal pose
+            estimation model to get body part polygons. Build fallback to
+            generic mask templates. Output: 5 layers (head, torso, front-legs,
+            rear-legs, tail) each with alpha-feathered edges and overlap zones.
+            Everything runs offline — no API calls."
 
 Session 4: "Build the puppet rig: joint system connecting segments, pivot
             points, z-index ordering. Implement idle breathing animation
@@ -728,7 +728,7 @@ Each session is scoped to ~1–2 hours of Claude Code work with clear acceptance
 - **Webcam reaction**: Cat reacts when it "sees" you via webcam (face detection)
 - **Widget mode**: Smaller version that sits in system tray / menu bar
 - **Mobile companion**: React Native version that syncs pet state
-- **AI personality**: Use Claude API to generate unique personality traits and dialogue bubbles based on the cat's appearance ("I'm a distinguished tuxedo cat, I demand treats")
+- **AI personality** (optional, requires API key): Use Claude API to generate unique personality traits and dialogue bubbles based on the cat's appearance ("I'm a distinguished tuxedo cat, I demand treats") — this is the ONLY feature that would need an API key, and it's a stretch goal, not core functionality
 
 ---
 
@@ -959,14 +959,11 @@ CatPet/                              ← User extracts this folder anywhere
 ├── README.txt                       ← Quick-start instructions (see §11.3)
 ├── resources/
 │   ├── app.asar                     ← Bundled app code (JS/HTML/CSS)
-│   └── native/                      ← Pre-compiled native modules
-│       ├── onnxruntime-node/        ← ONNX Runtime for background removal + segmentation
-│       │   └── onnxruntime.dll
+│   └── native/                      ← Pre-compiled native modules (Sharp only; ONNX uses WASM)
 │       ├── sharp/                   ← Image processing native bindings
 │       │   └── sharp-win32-x64.node
-│       └── models/                  ← ML models bundled with the app
-│           ├── bg-removal.onnx      ← Background removal model (~30MB, quantized int8)
-│           └── segmentation.onnx    ← Body part segmentation fallback (~15MB)
+│       └── models/                  ← ONNX model for body-part segmentation
+│           └── segmentation.onnx    ← Body-part segmentation model (~15MB, quantized int8)
 ├── locales/
 ├── d3dcompiler_47.dll               ← Chromium/Electron runtime
 ├── ffmpeg.dll
@@ -1025,9 +1022,9 @@ Electron itself ships Chromium + Node.js, so you automatically get: a full V8 Ja
 
 | Module | What It Does | Native Binary | Bundle Strategy |
 |--------|-------------|---------------|-----------------|
-| `@imgly/background-removal-node` | Removes photo backgrounds | `onnxruntime.dll` (~25MB) | Use `electron-builder`'s `extraResources` to copy pre-built win-x64 binary into `resources/native/` |
+| `@imgly/background-removal` | Removes photo backgrounds | None — ONNX WebAssembly (~24MB WASM) | Bundled automatically by Vite into `dist/assets/`; no native DLL, no extra config |
 | `sharp` | Image resize, crop, composite | `sharp-win32-x64.node` (~8MB) | Ship pre-built platform-specific binary via `@img/sharp-win32-x64` |
-| ONNX models | ML model files | `.onnx` files (~45MB raw) | Quantize to int8 (~15MB each), bundle in `resources/native/models/` |
+| ONNX segmentation model | Body-part detection | `.onnx` file (~15MB) | Quantize to int8, bundle in `resources/native/models/` via `extraResources` |
 
 #### VC++ Runtime (Critical)
 
@@ -1047,9 +1044,7 @@ extraFiles:
     to: "."
 
 extraResources:
-  # Native modules — copied to resources/ inside the app
-  - from: "native-deps/onnxruntime-node"
-    to: "native/onnxruntime-node"
+  # Sharp native binary — only native module needed (BG removal uses WASM, bundled by Vite)
   - from: "native-deps/sharp"
     to: "native/sharp"
   - from: "native-deps/models"
@@ -1089,14 +1084,11 @@ extraFiles:
     to: "."
 
 extraResources:
-  # Native node modules (pre-built for win-x64)
-  - from: "native-deps/onnxruntime-node"
-    to: "native/onnxruntime-node"
-    filter: ["**/*.dll", "**/*.node"]
+  # Sharp native binary (BG removal uses WASM — bundled by Vite automatically, no extraResources needed)
   - from: "native-deps/sharp"
     to: "native/sharp"
     filter: ["**/*.dll", "**/*.node"]
-  # ML models (quantized for smaller zip)
+  # ONNX segmentation model (~15MB int8 quantized)
   - from: "native-deps/models"
     to: "native/models"
     filter: ["*.onnx"]
@@ -1126,14 +1118,14 @@ pnpm run package:zip        # Runs package-portable.ts → CatPet-1.0.0-win-x64.
 | Component | Size | Notes |
 |-----------|------|-------|
 | Electron runtime (Chromium + Node) | ~75MB | Unavoidable baseline |
-| ONNX Runtime native DLLs | ~25MB | Background removal engine |
+| BG removal ONNX WASM | ~24MB | Bundled by Vite — no native DLL needed |
 | Sharp native binary | ~8MB | Image processing |
-| ONNX models (int8 quantized) | ~30MB | BG removal + segmentation |
-| App code (JS/HTML/CSS) | ~3MB | Your actual application |
-| VC++ runtime DLLs | ~1MB | Ensures native modules load |
+| Segmentation ONNX model (int8) | ~15MB | Body-part detection model |
+| App code + onnxruntime-web (JS/WASM) | ~5MB | Application + ONNX web runtime |
+| VC++ runtime DLLs (Sharp only) | ~1MB | Ensures Sharp native module loads |
 | Assets (guide images, sounds) | ~5MB | Onboarding examples, overlays |
-| **Total (uncompressed)** | **~147MB** | |
-| **Total (zip level 9)** | **~100–120MB** | DLLs compress well |
+| **Total (uncompressed)** | **~133MB** | ~14MB smaller — no native ONNX DLL |
+| **Total (zip level 9)** | **~95–110MB** | WASM compresses well |
 
 #### Verification Checklist (Session 9)
 
