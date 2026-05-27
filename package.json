@@ -1,0 +1,41 @@
+{
+  "name": "catpet",
+  "version": "0.1.0",
+  "description": "Virtual desktop pet from your cat photo",
+  "main": "dist-electron/main.js",
+  "author": "Long Jin",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build && electron-builder",
+    "build:renderer": "tsc && vite build",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "electron:dev": "concurrently \"vite\" \"wait-on tcp:5173 && electron .\"",
+    "preview": "vite preview",
+    "package:zip": "ts-node scripts/package-portable.ts",
+    "lint": "eslint . --ext .ts,.tsx"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0",
+    "xstate": "^5.18.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "esbuild"]
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^8.2.2",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.5.2",
+    "vite": "^5.3.1",
+    "vite-plugin-electron": "^0.28.7",
+    "vite-plugin-electron-renderer": "^0.14.5",
+    "wait-on": "^7.2.0"
+  }
+}

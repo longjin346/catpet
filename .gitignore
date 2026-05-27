@@ -1,0 +1,21 @@
+node_modules/
+dist/
+dist-electron/
+.env
+.env.*
+*.local
+
+# Native deps (large binaries — fetched at build time)
+native-deps/
+build/redist/
+
+# User data (never commit personal cat photos)
+userdata/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/
