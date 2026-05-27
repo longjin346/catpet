@@ -14,8 +14,9 @@ app.setPath('appData', PORTABLE_DATA)
 
 const store = new Store()
 
-let overlayWin: BrowserWindow | null = null
+let overlayWin:  BrowserWindow | null = null
 let settingsWin: BrowserWindow | null = null
+let prefsWin:    BrowserWindow | null = null
 
 function isFirstLaunch(): boolean {
   return !fs.existsSync(path.join(PORTABLE_DATA, 'cat.json'))
@@ -82,13 +83,44 @@ function createSettingsWindow() {
   })
 }
 
+function createPreferencesWindow() {
+  if (prefsWin) {
+    prefsWin.focus()
+    return
+  }
+
+  prefsWin = new BrowserWindow({
+    width: 480,
+    height: 480,
+    title: 'CatPet — Preferences',
+    resizable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+
+  const base = process.env.VITE_DEV_SERVER_URL ?? `file://${path.join(__dirname, '../dist/index.html')}`
+  prefsWin.loadURL(`${base}?view=preferences`)
+
+  prefsWin.on('closed', () => {
+    prefsWin = null
+  })
+}
+
 // ─── IPC Handlers ─────────────────────────────────────────────────────────────
 
 ipcMain.on('cat-hover', (_e, isHovering: boolean) => {
   overlayWin?.setIgnoreMouseEvents(!isHovering, { forward: true })
 })
 
-ipcMain.on('open-settings', () => createSettingsWindow())
+ipcMain.on('open-settings',     () => createSettingsWindow())
+ipcMain.on('open-preferences',  () => createPreferencesWindow())
+
+ipcMain.on('prefs:changed', () => {
+  overlayWin?.webContents.send('prefs:changed')
+})
 
 ipcMain.handle('app:is-first-launch', () => isFirstLaunch())
 
@@ -204,6 +236,7 @@ app.whenReady().then(() => {
 
   setupTray(
     () => createSettingsWindow(),
+    () => createPreferencesWindow(),
     () => app.quit()
   )
 })

@@ -1,4 +1,5 @@
 import { assign, setup } from 'xstate'
+import { getPersonality } from './personality'
 
 export interface PetContext {
   walkTargetX: number
@@ -22,19 +23,19 @@ export const petMachine = setup({
   },
 
   delays: {
-    IDLE_TIMEOUT:    () => 7000  + Math.random() * 9000,
-    WALK_TIMEOUT:    () => 8000  + Math.random() * 4000,
-    SLEEP_TIMEOUT:   () => 18000 + Math.random() * 14000,
-    GROOM_TIMEOUT:   () => 6000  + Math.random() * 6000,
-    PLAY_TIMEOUT:    () => 8000  + Math.random() * 6000,
+    IDLE_TIMEOUT:    () => (7000  + Math.random() * 9000)  * getPersonality().idleMultiplier,
+    WALK_TIMEOUT:    () => (8000  + Math.random() * 4000)  * getPersonality().walkMultiplier,
+    SLEEP_TIMEOUT:   () => (18000 + Math.random() * 14000) * getPersonality().sleepMultiplier,
+    GROOM_TIMEOUT:   () => (6000  + Math.random() * 6000)  * getPersonality().groomMultiplier,
+    PLAY_TIMEOUT:    () => (8000  + Math.random() * 6000)  * getPersonality().playMultiplier,
     STARTLE_TIMEOUT: 700,
   },
 
   guards: {
-    shouldWalk:  () => Math.random() < 0.40,
-    shouldPlay:  () => Math.random() < 0.30,
-    shouldSleep: () => Math.random() < 0.35,
-    shouldGroom: () => Math.random() < 0.45,
+    shouldWalk:  () => Math.random() < getPersonality().shouldWalkProb,
+    shouldPlay:  () => Math.random() < getPersonality().shouldPlayProb,
+    shouldSleep: () => Math.random() < getPersonality().shouldSleepProb,
+    shouldGroom: () => Math.random() < getPersonality().shouldGroomProb,
   },
 
   actions: {

@@ -16,6 +16,10 @@ const WALK_SPEED    = 55
 const ARRIVE_THRESH = 8
 const EDGE_PAD      = 40
 
+// Walk speed multiplier, updated by PetView when personality changes
+let walkSpeedMultiplier = 1.0
+export function setWalkSpeedMultiplier(m: number): void { walkSpeedMultiplier = m }
+
 function lerp(a: number, b: number, dt: number): number {
   return a + (b - a) * Math.min(1, dt * LERP_SPEED)
 }
@@ -55,9 +59,10 @@ export class PuppetRig {
     catScreenX: number,
     screenH: number,
     screenW: number,
+    scaleMult = 1.0,
   ) {
     this.rig     = rig
-    this.scale   = CAT_HEIGHT_PX / rig.catHeight
+    this.scale   = (CAT_HEIGHT_PX / rig.catHeight) * scaleMult
     this.catX    = catScreenX
     this.catY    = screenH - BOTTOM_PAD
     this.screenW = screenW
@@ -80,8 +85,9 @@ export class PuppetRig {
     catScreenX: number,
     screenH: number,
     screenW: number,
+    scaleMult = 1.0,
   ): Promise<PuppetRig> {
-    const puppet = new PuppetRig(app, rig, catScreenX, screenH, screenW)
+    const puppet = new PuppetRig(app, rig, catScreenX, screenH, screenW, scaleMult)
     const { bboxOrigin, catWidth, catHeight } = rig
     const s = puppet.scale
 
@@ -161,7 +167,7 @@ export class PuppetRig {
         this.walkTargetX = null
         arrived          = true
       } else {
-        this.catX += Math.sign(dx) * Math.min(WALK_SPEED * dt, dist)
+        this.catX += Math.sign(dx) * Math.min(WALK_SPEED * walkSpeedMultiplier * dt, dist)
       }
     }
 
