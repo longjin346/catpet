@@ -4,8 +4,9 @@ import path from 'path'
 let tray: Tray | null = null
 
 export function setupTray(
-  onSettings: () => void,
-  onQuit: () => void
+  onSettings:     () => void,
+  onPreferences:  () => void,
+  onQuit:         () => void,
 ) {
   // Use a bundled icon; fall back to an empty 16x16 image in dev
   const iconPath = path.join(__dirname, '../build/icon.png')
@@ -25,8 +26,12 @@ export function setupTray(
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: 'Settings',
+      label: 'Upload Photos',
       click: onSettings,
+    },
+    {
+      label: 'Preferences',
+      click: onPreferences,
     },
     { type: 'separator' },
     {

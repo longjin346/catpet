@@ -6,7 +6,16 @@ contextBridge.exposeInMainWorld('catpet', {
     ipcRenderer.send('cat-hover', isHovering),
 
   // Window management
-  openSettings: () => ipcRenderer.send('open-settings'),
+  openSettings:     () => ipcRenderer.send('open-settings'),
+  openPreferences:  () => ipcRenderer.send('open-preferences'),
+
+  // Preferences change notification
+  notifyPrefsChanged: () => ipcRenderer.send('prefs:changed'),
+  onPrefsChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback()
+    ipcRenderer.on('prefs:changed', handler)
+    return () => ipcRenderer.removeListener('prefs:changed', handler)
+  },
 
   // File operations
   openFileDialog: (): Promise<string | null> =>

@@ -7,6 +7,10 @@ declare global {
       setCatHover(isHovering: boolean): void
       // Window management
       openSettings(): void
+      openPreferences(): void
+      // Preferences sync
+      notifyPrefsChanged(): void
+      onPrefsChanged(callback: () => void): () => void
       // File operations
       openFileDialog(): Promise<string | null>
       readFile(filePath: string): Promise<string> // returns base64 data URL
