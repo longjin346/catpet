@@ -1,19 +1,25 @@
-import { app, BrowserWindow, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, screen, dialog } from 'electron'
 import path from 'path'
 import fs from 'fs'
+import Store from 'electron-store'
 import { setupTray } from './tray'
 
-// Portable data path — stored next to the exe, not in %APPDATA%
+// Portable data path — next to exe when packaged, dev path otherwise
 const PORTABLE_DATA = app.isPackaged
   ? path.join(path.dirname(process.execPath), 'userdata')
   : path.join(app.getPath('userData'), 'catpet-dev')
 
-// Override Electron's default data directories for portability
 app.setPath('userData', PORTABLE_DATA)
 app.setPath('appData', PORTABLE_DATA)
 
+const store = new Store()
+
 let overlayWin: BrowserWindow | null = null
 let settingsWin: BrowserWindow | null = null
+
+function isFirstLaunch(): boolean {
+  return !fs.existsSync(path.join(PORTABLE_DATA, 'cat.json'))
+}
 
 function createOverlayWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize
@@ -30,6 +36,7 @@ function createOverlayWindow() {
     hasShadow: false,
     resizable: false,
     focusable: false,
+    show: false, // hidden until a cat is loaded
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -37,14 +44,13 @@ function createOverlayWindow() {
     },
   })
 
-  // Fully click-through by default; renderer toggles on cat hover
   overlayWin.setIgnoreMouseEvents(true, { forward: true })
-
   overlayWin.setAlwaysOnTop(true, 'screen-saver')
   overlayWin.setVisibleOnAllWorkspaces(true)
 
-  if (process.env.VITE_DEV_SERVER_URL) {
-    overlayWin.loadURL(process.env.VITE_DEV_SERVER_URL)
+  const url = process.env.VITE_DEV_SERVER_URL
+  if (url) {
+    overlayWin.loadURL(url)
   } else {
     overlayWin.loadFile(path.join(__dirname, '../dist/index.html'))
   }
@@ -57,9 +63,9 @@ function createSettingsWindow() {
   }
 
   settingsWin = new BrowserWindow({
-    width: 720,
-    height: 600,
-    title: 'CatPet Settings',
+    width: 820,
+    height: 700,
+    title: 'CatPet — Upload Photos',
     resizable: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -68,36 +74,100 @@ function createSettingsWindow() {
     },
   })
 
-  const settingsUrl = process.env.VITE_DEV_SERVER_URL
-    ? `${process.env.VITE_DEV_SERVER_URL}?view=settings`
-    : `file://${path.join(__dirname, '../dist/index.html')}?view=settings`
-
-  settingsWin.loadURL(settingsUrl)
+  const base = process.env.VITE_DEV_SERVER_URL ?? `file://${path.join(__dirname, '../dist/index.html')}`
+  settingsWin.loadURL(`${base}?view=settings`)
 
   settingsWin.on('closed', () => {
     settingsWin = null
   })
 }
 
-// IPC: renderer tells us when mouse is over the cat sprite
-ipcMain.on('cat-hover', (_event, isHovering: boolean) => {
-  if (overlayWin) {
-    overlayWin.setIgnoreMouseEvents(!isHovering, { forward: true })
-  }
+// ─── IPC Handlers ─────────────────────────────────────────────────────────────
+
+ipcMain.on('cat-hover', (_e, isHovering: boolean) => {
+  overlayWin?.setIgnoreMouseEvents(!isHovering, { forward: true })
 })
 
-// IPC: open settings window from renderer or tray
-ipcMain.on('open-settings', () => {
-  createSettingsWindow()
+ipcMain.on('open-settings', () => createSettingsWindow())
+
+ipcMain.handle('app:is-first-launch', () => isFirstLaunch())
+
+ipcMain.handle('dialog:open-file', async () => {
+  const win = settingsWin ?? overlayWin
+  const result = await dialog.showOpenDialog(win!, {
+    title: 'Choose a cat photo',
+    filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'heic'] }],
+    properties: ['openFile'],
+  })
+  return result.canceled ? null : result.filePaths[0]
 })
+
+ipcMain.handle('file:read', (_e, filePath: string) => {
+  const data = fs.readFileSync(filePath)
+  const ext = path.extname(filePath).toLowerCase().slice(1)
+  const mime = ext === 'png' ? 'image/png'
+    : ext === 'webp' ? 'image/webp'
+    : 'image/jpeg'
+  return `data:${mime};base64,${data.toString('base64')}`
+})
+
+ipcMain.handle('photo:save', (_e, slot: string, dataUrl: string) => {
+  const photosDir = path.join(PORTABLE_DATA, 'photos')
+  if (!fs.existsSync(photosDir)) fs.mkdirSync(photosDir, { recursive: true })
+  const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '')
+  fs.writeFileSync(path.join(photosDir, `${slot}.png`), Buffer.from(base64, 'base64'))
+})
+
+ipcMain.handle('photo:load-all', () => {
+  const photosDir = path.join(PORTABLE_DATA, 'photos')
+  const result: Record<string, string> = {}
+  const roles = ['primary', 'face', 'sleep', 'action', 'back', 'texture']
+  for (const role of roles) {
+    const p = path.join(photosDir, `${role}.png`)
+    if (fs.existsSync(p)) {
+      result[role] = `data:image/png;base64,${fs.readFileSync(p).toString('base64')}`
+    }
+  }
+  return result
+})
+
+ipcMain.handle('photo:delete', (_e, slot: string) => {
+  const p = path.join(PORTABLE_DATA, 'photos', `${slot}.png`)
+  if (fs.existsSync(p)) fs.unlinkSync(p)
+})
+
+ipcMain.handle('store:get', (_e, key: string) => store.get(key))
+ipcMain.handle('store:set', (_e, key: string, value: unknown) => { store.set(key, value) })
+
+ipcMain.on('cat:ready', () => {
+  // Save cat.json marker so next launch skips onboarding
+  if (!fs.existsSync(PORTABLE_DATA)) fs.mkdirSync(PORTABLE_DATA, { recursive: true })
+  const configPath = path.join(PORTABLE_DATA, 'cat.json')
+  if (!fs.existsSync(configPath)) fs.writeFileSync(configPath, '{}')
+
+  // Show overlay and notify it to load the cat
+  overlayWin?.show()
+  overlayWin?.webContents.send('cat:loaded')
+
+  // Close settings window
+  settingsWin?.close()
+})
+
+// ─── App lifecycle ─────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
-  // Ensure userdata directory exists
-  if (!fs.existsSync(PORTABLE_DATA)) {
-    fs.mkdirSync(PORTABLE_DATA, { recursive: true })
-  }
+  if (!fs.existsSync(PORTABLE_DATA)) fs.mkdirSync(PORTABLE_DATA, { recursive: true })
 
   createOverlayWindow()
+
+  if (isFirstLaunch()) {
+    // First launch: open upload wizard automatically
+    createSettingsWindow()
+  } else {
+    // Returning user: show overlay with existing cat
+    overlayWin?.show()
+  }
+
   setupTray(
     () => createSettingsWindow(),
     () => app.quit()
@@ -105,7 +175,7 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  // Keep app alive even if all windows close — lives in tray
+  // Keep alive in tray — don't quit when windows close
 })
 
 app.on('activate', () => {

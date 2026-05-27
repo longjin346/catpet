@@ -41,4 +41,16 @@ export default defineConfig({
       '@': path.resolve(__dirname, 'src'),
     },
   },
+  optimizeDeps: {
+    // @imgly/background-removal uses dynamic imports for ONNX workers;
+    // excluding it from pre-bundling lets it manage its own assets.
+    exclude: ['@imgly/background-removal'],
+  },
+  server: {
+    headers: {
+      // Required for SharedArrayBuffer used by ONNX web workers
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
+  },
 })

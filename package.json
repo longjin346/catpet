@@ -16,11 +16,15 @@
     "lint": "eslint . --ext .ts,.tsx"
   },
   "dependencies": {
+    "@imgly/background-removal": "^1.7.0",
     "electron-store": "^8.2.0",
     "xstate": "^5.18.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["electron", "esbuild"]
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

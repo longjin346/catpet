@@ -1,10 +1,47 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('catpet', {
-  // Notify main process when mouse enters/leaves cat hitbox
+  // Overlay click-through
   setCatHover: (isHovering: boolean) =>
     ipcRenderer.send('cat-hover', isHovering),
 
-  // Open the settings window
+  // Window management
   openSettings: () => ipcRenderer.send('open-settings'),
+
+  // File operations
+  openFileDialog: (): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:open-file'),
+
+  readFile: (filePath: string): Promise<string> =>
+    ipcRenderer.invoke('file:read', filePath),
+
+  savePhoto: (slot: string, dataUrl: string): Promise<void> =>
+    ipcRenderer.invoke('photo:save', slot, dataUrl),
+
+  loadPhotos: (): Promise<Record<string, string>> =>
+    ipcRenderer.invoke('photo:load-all'),
+
+  deletePhoto: (slot: string): Promise<void> =>
+    ipcRenderer.invoke('photo:delete', slot),
+
+  // Key-value store
+  storeGet: (key: string): Promise<unknown> =>
+    ipcRenderer.invoke('store:get', key),
+
+  storeSet: (key: string, value: unknown): Promise<void> =>
+    ipcRenderer.invoke('store:set', key, value),
+
+  // First-launch
+  isFirstLaunch: (): Promise<boolean> =>
+    ipcRenderer.invoke('app:is-first-launch'),
+
+  // Signal to main that the cat is configured and ready to show
+  catReady: () => ipcRenderer.send('cat:ready'),
+
+  // Listen for overlay to reload cat data
+  onCatLoaded: (callback: () => void): (() => void) => {
+    const handler = () => callback()
+    ipcRenderer.on('cat:loaded', handler)
+    return () => ipcRenderer.removeListener('cat:loaded', handler)
+  },
 })
