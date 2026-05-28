@@ -126,6 +126,12 @@ export class PuppetRig {
     this.walkTargetX = Math.max(EDGE_PAD, Math.min(this.screenW - EDGE_PAD, x))
   }
 
+  /** Instantly move the cat to x, cancelling any active walk. */
+  teleport(x: number): void {
+    this.catX        = Math.max(EDGE_PAD, Math.min(this.screenW - EDGE_PAD, x))
+    this.walkTargetX = null
+  }
+
   set visible(v: boolean) {
     this.catGroup.visible = v
   }
