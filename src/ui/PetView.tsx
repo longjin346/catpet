@@ -9,7 +9,7 @@ import { setPersonality, getPersonality, PERSONALITIES, type PersonalityId } fro
 import { POSES } from '../core/poses'
 import type { RigDefinition } from '../utils/config'
 
-const CAT_X_START   = 200
+const CAT_X_DEFAULT = 200
 const CAT_HEIGHT    = 150
 const BOTTOM_PAD    = 20
 const STARTLE_SPEED = 900
@@ -39,6 +39,7 @@ async function makePhotoSprite(
   dataUrl: string,
   app: Application,
   screenH: number,
+  startX: number,
   visible = false,
 ): Promise<FlatSprite> {
   const img = new Image()
@@ -49,7 +50,7 @@ async function makePhotoSprite(
   const scale   = CAT_HEIGHT / sprite.texture.height
   sprite.pivot.set(sprite.texture.width / 2, sprite.texture.height)
   sprite.scale.set(scale)
-  sprite.position.set(CAT_X_START, screenH - BOTTOM_PAD)
+  sprite.position.set(startX, screenH - BOTTOM_PAD)
   sprite.visible = visible
   app.stage.addChild(sprite)
   return { sprite, basePivotY: screenH - BOTTOM_PAD }
@@ -69,7 +70,9 @@ export default function PetView() {
   // Time of last periodic particle burst per state
   const lastBurstRef  = useRef<number>(0)
   // Loaded cat scale multiplier
-  const catScaleRef   = useRef<number>(1.0)
+  const catScaleRef    = useRef<number>(1.0)
+  const isDraggingRef  = useRef<boolean>(false)
+  const dragOffsetXRef = useRef<number>(0)
 
   const clearScene = useCallback(() => {
     rigRef.current?.destroy()
@@ -117,25 +120,30 @@ export default function PetView() {
     catScaleRef.current = scale
 
     const h = screenH()
-    const [rawSegments, rawRig, photos] = await Promise.all([
+    const EDGE = 40
+    const [rawSegments, rawRig, photos, savedFrac] = await Promise.all([
       window.catpet.loadSegments('primary'),
       window.catpet.loadRig('primary'),
       window.catpet.loadPhotos(),
+      window.catpet.storeGet('catPositionFraction'),
     ])
+    const catScreenX = typeof savedFrac === 'number'
+      ? Math.max(EDGE, Math.min(window.innerWidth - EDGE, savedFrac * window.innerWidth))
+      : CAT_X_DEFAULT
 
     if (rawSegments && rawRig) {
       rigRef.current = await PuppetRig.create(
         app,
         rawSegments,
         rawRig as RigDefinition,
-        CAT_X_START,
+        catScreenX,
         h,
         window.innerWidth,
         catScaleRef.current,
       )
 
-      if (photos.sleep)  sleepRef.current  = await makePhotoSprite(photos.sleep,  app, h)
-      if (photos.action) actionRef.current = await makePhotoSprite(photos.action, app, h)
+      if (photos.sleep)  sleepRef.current  = await makePhotoSprite(photos.sleep,  app, h, catScreenX)
+      if (photos.action) actionRef.current = await makePhotoSprite(photos.action, app, h, catScreenX)
 
       actorRef.current?.stop()
       prevStateRef.current = 'idle'
@@ -147,7 +155,7 @@ export default function PetView() {
     }
 
     if (photos.primary) {
-      flatRef.current = await makePhotoSprite(photos.primary, app, h, true)
+      flatRef.current = await makePhotoSprite(photos.primary, app, h, catScreenX, true)
     }
   }, [clearScene, screenH, loadPrefs])
 
@@ -196,8 +204,10 @@ export default function PetView() {
             const prev = prevStateRef.current
             prevStateRef.current = stateVal
 
-            // Walk target
-            if (stateVal === 'walking') rig.setWalkTarget(snap.context.walkTargetX)
+            // Walk target — suppressed while user is dragging
+            if (stateVal === 'walking' && !isDraggingRef.current) {
+              rig.setWalkTarget(snap.context.walkTargetX)
+            }
 
             // Sound transitions
             const wasP = PURRING_STATES.has(prev)
@@ -283,6 +293,13 @@ export default function PetView() {
     let lastMouseX = 0, lastMouseY = 0, lastMouseT = 0
 
     function onMouseMove(e: MouseEvent) {
+      // During drag: move cat, keep click-through disabled, skip startle logic
+      if (isDraggingRef.current) {
+        rigRef.current?.teleport(e.clientX - dragOffsetXRef.current)
+        window.catpet.setCatHover(true)
+        return
+      }
+
       const now = performance.now()
       const dt  = (now - lastMouseT) / 1000
 
@@ -316,13 +333,26 @@ export default function PetView() {
     }
 
     function onPointerDown(e: PointerEvent) {
-      if (rigRef.current?.hitTest(e.clientX, e.clientY)) {
+      const rig = rigRef.current
+      if (rig?.hitTest(e.clientX, e.clientY)) {
+        isDraggingRef.current  = true
+        dragOffsetXRef.current = e.clientX - rig.x
         actorRef.current?.send({ type: 'STARTLE' })
+      }
+    }
+
+    function onPointerUp() {
+      if (!isDraggingRef.current) return
+      isDraggingRef.current = false
+      const rig = rigRef.current
+      if (rig) {
+        window.catpet.storeSet('catPositionFraction', rig.x / window.innerWidth)
       }
     }
 
     window.addEventListener('mousemove',   onMouseMove)
     window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('pointerup',   onPointerUp)
 
     return () => {
       cancelled = true
@@ -330,6 +360,7 @@ export default function PetView() {
       unsubPrefsChanged()
       window.removeEventListener('mousemove',   onMouseMove)
       window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('pointerup',   onPointerUp)
       actorRef.current?.stop()
       actorRef.current = null
       emitterRef.current?.destroy()
