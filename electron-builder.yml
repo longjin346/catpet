@@ -1,12 +1,21 @@
 appId: com.longjin.catpet
 productName: CatPet
+copyright: Copyright © 2025 Long Jin
+
 directories:
   output: dist
   buildResources: build
 
+# Renderer (dist/) and Electron main (dist-electron/) are bundled.
+# ONNX WASM files live in dist/assets/ and are included automatically —
+# no native Node modules needed; all AI runs in the renderer via WebAssembly.
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - "!dist/win-unpacked{,/**}"
+  - "!**/*.map"
+
 asar: true
-asarUnpack:
-  - "native-deps/**"
 
 win:
   target:
@@ -14,21 +23,7 @@ win:
       arch: [x64]
   icon: build/icon.ico
 
-# No NSIS — portable zip only
-
+# README ships next to the exe so users know how to run the portable build
 extraFiles:
-  - from: "README.txt"
-    to: "."
-    filter:
-      - "**/*"
-
-extraResources:
-  - from: "native-deps/onnxruntime-node"
-    to: "native/onnxruntime-node"
-    filter: ["**/*.dll", "**/*.node"]
-  - from: "native-deps/sharp"
-    to: "native/sharp"
-    filter: ["**/*.dll", "**/*.node"]
-  - from: "native-deps/models"
-    to: "native/models"
-    filter: ["*.onnx"]
+  - from: README.txt
+    to: README.txt
