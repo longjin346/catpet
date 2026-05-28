@@ -14,9 +14,10 @@ app.setPath('appData', PORTABLE_DATA)
 
 const store = new Store()
 
-let overlayWin:  BrowserWindow | null = null
-let settingsWin: BrowserWindow | null = null
-let prefsWin:    BrowserWindow | null = null
+let overlayWin:     BrowserWindow | null = null
+let settingsWin:    BrowserWindow | null = null
+let prefsWin:       BrowserWindow | null = null
+let onboardingWin:  BrowserWindow | null = null
 
 function isFirstLaunch(): boolean {
   return !fs.existsSync(path.join(PORTABLE_DATA, 'cat.json'))
@@ -55,6 +56,32 @@ function createOverlayWindow() {
   } else {
     overlayWin.loadFile(path.join(__dirname, '../dist/index.html'))
   }
+}
+
+function createOnboardingWindow() {
+  if (onboardingWin) {
+    onboardingWin.focus()
+    return
+  }
+
+  onboardingWin = new BrowserWindow({
+    width: 760,
+    height: 620,
+    title: 'CatPet — Welcome',
+    resizable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+
+  const base = process.env.VITE_DEV_SERVER_URL ?? `file://${path.join(__dirname, '../dist/index.html')}`
+  onboardingWin.loadURL(`${base}?view=onboarding`)
+
+  onboardingWin.on('closed', () => {
+    onboardingWin = null
+  })
 }
 
 function createSettingsWindow() {
@@ -215,7 +242,8 @@ ipcMain.on('cat:ready', () => {
   overlayWin?.show()
   overlayWin?.webContents.send('cat:loaded')
 
-  // Close settings window
+  // Close whichever upload window is open
+  onboardingWin?.close()
   settingsWin?.close()
 })
 
@@ -227,8 +255,8 @@ app.whenReady().then(() => {
   createOverlayWindow()
 
   if (isFirstLaunch()) {
-    // First launch: open upload wizard automatically
-    createSettingsWindow()
+    // First launch: guided onboarding wizard
+    createOnboardingWindow()
   } else {
     // Returning user: show overlay with existing cat
     overlayWin?.show()

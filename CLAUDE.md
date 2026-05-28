@@ -48,10 +48,13 @@ src/
   main.tsx      — React entry point
   electron.d.ts — Global window.catpet type declaration
   ui/
-    App.tsx          — Route: ?view=settings → Upload wizard, default → PetView
-    PetView.tsx      — PixiJS overlay; PuppetRig + FSM actor; multi-photo routing
-    Upload.tsx       — 6-slot guided upload wizard + background removal + segmentation
-    QualityMeter.tsx — 1–6 photo count with color-coded quality label
+    App.tsx             — Route: ?view=onboarding | settings | preferences | default overlay
+    PetView.tsx         — PixiJS overlay; PuppetRig + FSM actor; particles; sound; multi-photo routing
+    OnboardingWizard.tsx — 4-step first-launch wizard (welcome → primary → optional → launch)
+    CatGuide.tsx        — Canvas-drawn cat silhouettes for each photo slot (6 drawings)
+    Upload.tsx          — 6-slot photo management grid (returning users via tray)
+    QualityMeter.tsx    — 1–6 photo count with color-coded quality label
+    Preferences.tsx     — Personality picker + sound + cat-size settings panel
   processing/
     background-removal.ts  — @imgly/background-removal (WASM) wrapper with progress cb
     photo-validator.ts     — Size / brightness / sharpness checks (Canvas API)
@@ -161,8 +164,8 @@ The rig always ticks (invisible when a flat photo takes over) so position and po
 | 4 | Puppet rig + PixiJS v8 + idle breathing animation | **Done** |
 | 5 | XState FSM + pose library + lerp interpolation | **Done** |
 | 6 | Directional walk flip + screen-edge clamp + multi-photo routing | **Done** |
-| 7 | Particle overlays + sound + settings panel + personality system | Pending |
-| 8 | First-launch onboarding wizard with photo guide | Pending |
+| 7 | Particle overlays + sound + settings panel + personality system | **Done** |
+| 8 | First-launch onboarding wizard with photo guide | **Done** |
 | 9 | Portable zip packaging + clean-machine verification | Pending |
 
 ---
