@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, screen, dialog, session } from 'electron'
+import { app, BrowserWindow, ipcMain, screen, dialog, session, globalShortcut } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import Store from 'electron-store'
-import { setupTray } from './tray'
+import { setupTray, updateTrayTooltip, updateTrayToggle } from './tray'
 
 // Portable data path — next to exe when packaged, dev path otherwise
 const PORTABLE_DATA = app.isPackaged
@@ -18,9 +18,35 @@ let overlayWin:     BrowserWindow | null = null
 let settingsWin:    BrowserWindow | null = null
 let prefsWin:       BrowserWindow | null = null
 let onboardingWin:  BrowserWindow | null = null
+let overlayShown    = false
 
 function isFirstLaunch(): boolean {
   return !fs.existsSync(path.join(PORTABLE_DATA, 'cat.json'))
+}
+
+function showOverlay(): void {
+  if (!overlayWin) return
+  overlayWin.show()
+  overlayShown = true
+  updateTrayToggle(true)
+}
+
+function toggleOverlay(): void {
+  if (!overlayWin) return
+  if (overlayShown) {
+    overlayWin.hide()
+    overlayShown = false
+    updateTrayToggle(false)
+  } else {
+    overlayWin.show()
+    overlayShown = true
+    updateTrayToggle(true)
+  }
+}
+
+function refreshTrayName(): void {
+  const config = store.get('catConfig') as { name?: string } | undefined
+  if (config?.name) updateTrayTooltip(config.name)
 }
 
 function createOverlayWindow() {
@@ -239,8 +265,11 @@ ipcMain.on('cat:ready', () => {
   if (!fs.existsSync(configPath)) fs.writeFileSync(configPath, '{}')
 
   // Show overlay and notify it to load the cat
-  overlayWin?.show()
+  showOverlay()
   overlayWin?.webContents.send('cat:loaded')
+
+  // Update tray tooltip with cat name
+  refreshTrayName()
 
   // Close whichever upload window is open
   onboardingWin?.close()
@@ -271,14 +300,28 @@ app.whenReady().then(() => {
     createOnboardingWindow()
   } else {
     // Returning user: show overlay with existing cat
-    overlayWin?.show()
+    showOverlay()
   }
 
   setupTray(
     () => createSettingsWindow(),
     () => createPreferencesWindow(),
-    () => app.quit()
+    () => toggleOverlay(),
+    () => app.quit(),
   )
+
+  // Set cat name in tray tooltip for returning users
+  if (!isFirstLaunch()) refreshTrayName()
+
+  // Global keyboard shortcuts
+  globalShortcut.register('CommandOrControl+Shift+P', () => createSettingsWindow())
+  globalShortcut.register('CommandOrControl+Shift+S', () => createPreferencesWindow())
+  globalShortcut.register('CommandOrControl+Shift+H', () => toggleOverlay())
+  globalShortcut.register('CommandOrControl+Shift+Q', () => app.quit())
+})
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
 })
 
 app.on('window-all-closed', () => {
