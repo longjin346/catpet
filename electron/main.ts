@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, screen, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, screen, dialog, session } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import Store from 'electron-store'
@@ -251,6 +251,18 @@ ipcMain.on('cat:ready', () => {
 
 app.whenReady().then(() => {
   if (!fs.existsSync(PORTABLE_DATA)) fs.mkdirSync(PORTABLE_DATA, { recursive: true })
+
+  // Required for SharedArrayBuffer used by ONNX WASM worker threads.
+  // The dev server sets these via vite.config.ts; production needs them here.
+  session.defaultSession.webRequest.onHeadersReceived((_details, callback) => {
+    callback({
+      responseHeaders: {
+        ..._details.responseHeaders,
+        'Cross-Origin-Opener-Policy':   ['same-origin'],
+        'Cross-Origin-Embedder-Policy': ['require-corp'],
+      },
+    })
+  })
 
   createOverlayWindow()
 

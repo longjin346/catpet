@@ -7,12 +7,12 @@
   "license": "MIT",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && electron-builder",
-    "build:renderer": "tsc && vite build",
-    "build:electron": "tsc -p tsconfig.electron.json",
+    "build": "tsc -p tsconfig.json --noEmit && vite build && electron-builder",
+    "build:renderer": "vite build",
+    "build:electron": "vite build",
     "electron:dev": "concurrently \"vite\" \"wait-on tcp:5173 && electron .\"",
     "preview": "vite preview",
-    "package:zip": "ts-node scripts/package-portable.ts",
+    "package:zip": "node scripts/package-portable.mjs",
     "lint": "eslint . --ext .ts,.tsx"
   },
   "dependencies": {
@@ -28,10 +28,12 @@
     ]
   },
   "devDependencies": {
+    "@types/archiver": "^7.0.0",
     "@types/node": "^20.14.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "archiver": "^8.0.0",
     "concurrently": "^8.2.2",
     "electron": "^31.0.0",
     "electron-builder": "^24.13.3",

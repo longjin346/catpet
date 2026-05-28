@@ -180,9 +180,41 @@ pnpm electron:dev    # Vite HMR + Electron together
 ## Build
 
 ```bash
-pnpm build           # Vite + electron-builder → dist/win-unpacked/
-pnpm package:zip     # → dist/CatPet-x.x.x-win-x64.zip
+# Full type-check + bundle + package (run on Windows for a real exe)
+pnpm build           # tsc --noEmit && vite build && electron-builder → dist/win-unpacked/
+pnpm package:zip     # node scripts/package-portable.mjs → dist/CatPet-x.x.x-win-x64.zip
 ```
+
+### Build prerequisites
+
+- Run on **Windows x64** — cross-compiling the Electron exe from Linux is unsupported.
+- No additional runtimes needed on the target machine: everything (ONNX WASM, PixiJS, XState) is bundled into `dist/` by Vite.
+- Placeholder icons are in `build/`. Replace `build/icon.ico` and `build/icon.png` with a real 256×256 icon before distributing.
+
+### Portable zip structure
+
+```
+CatPet-0.1.0-win-x64.zip
+└── CatPet/
+    ├── CatPet.exe          ← double-click to launch
+    ├── README.txt
+    ├── resources/
+    │   └── app.asar        ← bundled renderer + main (WASM inside)
+    └── ...electron runtime files...
+```
+
+On first launch, `CatPet/userdata/` is created next to the exe.
+Copy the entire `CatPet/` folder to move to another machine — no install, no registry.
+
+### Clean-machine verification checklist
+
+1. Extract zip on a fresh Windows machine (no Node.js, no VC++ redist needed)
+2. Double-click `CatPet.exe` → onboarding wizard opens
+3. Upload a cat photo → background removal runs (WASM, ~15 s first time)
+4. Cat appears on screen, walks and breathes
+5. Check `CatPet/userdata/` was created next to the exe
+6. Copy the folder to a USB drive; run from there — still works
+7. Delete the folder — nothing left behind on the system
 
 ---
 
