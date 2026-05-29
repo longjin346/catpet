@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, screen, dialog, session, globalShortcut } 
 import path from 'path'
 import fs from 'fs'
 import Store from 'electron-store'
-import { setupTray, updateTrayTooltip, updateTrayToggle } from './tray'
+import { setupTray, updateTrayTooltip, updateTrayToggle, updateTrayHungry } from './tray'
 
 // Portable data path — next to exe when packaged, dev path otherwise
 const PORTABLE_DATA = app.isPackaged
@@ -144,7 +144,7 @@ function createPreferencesWindow() {
 
   prefsWin = new BrowserWindow({
     width: 480,
-    height: 480,
+    height: 660,
     title: 'CatPet — Preferences',
     resizable: false,
     webPreferences: {
@@ -170,6 +170,7 @@ ipcMain.on('cat-hover', (_e, isHovering: boolean) => {
 
 ipcMain.on('open-settings',     () => createSettingsWindow())
 ipcMain.on('open-preferences',  () => createPreferencesWindow())
+ipcMain.on('cat:hungry', (_e, isHungry: boolean) => updateTrayHungry(isHungry))
 
 ipcMain.on('prefs:changed', () => {
   overlayWin?.webContents.send('prefs:changed')
@@ -307,6 +308,7 @@ app.whenReady().then(() => {
     () => createSettingsWindow(),
     () => createPreferencesWindow(),
     () => toggleOverlay(),
+    () => overlayWin?.webContents.send('cat:feed'),
     () => app.quit(),
   )
 

@@ -1,6 +1,15 @@
 import type { LayerId } from '../utils/config'
 
-export type PetStateId = 'idle' | 'walking' | 'sleeping' | 'grooming' | 'startled' | 'playing'
+export type PetStateId =
+  | 'idle'
+  | 'walking'
+  | 'sitting'
+  | 'sleeping'
+  | 'stretching'
+  | 'grooming'
+  | 'startled'
+  | 'playing'
+  | 'hungry'
 
 export interface LayerPose {
   rotation: number  // radians
@@ -41,6 +50,18 @@ export const POSES: Record<PetStateId, PoseConfig> = {
     breathPeriod: 2.5,
   },
 
+  sitting: {
+    layers: {
+      head:         { rotation:  0.05, yOffset: -2, alpha: 1 },
+      torso:        { rotation:  0.06, yOffset: -2, alpha: 1 },
+      'front-legs': { rotation:  0.20, yOffset:  4, alpha: 1 },
+      'rear-legs':  { rotation: -0.15, yOffset:  2, alpha: 1 },
+      tail:         { rotation:  0.22, yOffset:  2, alpha: 1 },
+    },
+    breathAmp:    0.9,
+    breathPeriod: 3.5,
+  },
+
   sleeping: {
     layers: {
       head:         { rotation:  0.35, yOffset:  8, alpha: 1 },
@@ -51,6 +72,18 @@ export const POSES: Record<PetStateId, PoseConfig> = {
     },
     breathAmp:    0.22,
     breathPeriod: 5.0,
+  },
+
+  stretching: {
+    layers: {
+      head:         { rotation: -0.32, yOffset: -8, alpha: 1 },
+      torso:        { rotation: -0.10, yOffset: -3, alpha: 1 },
+      'front-legs': { rotation: -0.52, yOffset: -6, alpha: 1 },
+      'rear-legs':  { rotation:  0.28, yOffset:  2, alpha: 1 },
+      tail:         { rotation: -0.60, yOffset: -3, alpha: 1 },
+    },
+    breathAmp:    0.3,
+    breathPeriod: 2.0,
   },
 
   grooming: {
@@ -87,5 +120,17 @@ export const POSES: Record<PetStateId, PoseConfig> = {
     },
     breathAmp:    0.85,
     breathPeriod: 2.5,
+  },
+
+  hungry: {
+    layers: {
+      head:         { rotation: -0.12, yOffset: -3, alpha: 1 },
+      torso:        { rotation: -0.04, yOffset: -1, alpha: 1 },
+      'front-legs': { rotation:  0,    yOffset:  0, alpha: 1 },
+      'rear-legs':  { rotation:  0,    yOffset:  0, alpha: 1 },
+      tail:         { rotation: -0.12, yOffset: -1, alpha: 1 },
+    },
+    breathAmp:    0.9,
+    breathPeriod: 2.2,
   },
 }

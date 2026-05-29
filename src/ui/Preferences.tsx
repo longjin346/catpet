@@ -1,39 +1,69 @@
 import { useState, useEffect, CSSProperties } from 'react'
 import { PERSONALITIES, PERSONALITY_IDS, type PersonalityId } from '../core/personality'
 
+interface Stats {
+  firstLaunch:   string | null
+  launchCount:   number
+  interactions:  number
+  playSeconds:   number
+}
+
 export default function Preferences() {
-  const [personality, setPersonality] = useState<PersonalityId>('chill')
-  const [soundMuted,  setSoundMuted]  = useState(true)
-  const [volume,      setVolume]      = useState(35)
-  const [catScale,    setCatScale]    = useState(100)
-  const [saved,       setSaved]       = useState(false)
+  const [personality,     setPersonality]     = useState<PersonalityId>('chill')
+  const [soundMuted,      setSoundMuted]      = useState(true)
+  const [volume,          setVolume]          = useState(35)
+  const [catScale,        setCatScale]        = useState(100)
+  const [hungerHours,     setHungerHours]     = useState(1.5)
+  const [saved,           setSaved]           = useState(false)
+  const [stats,           setStats]           = useState<Stats>({
+    firstLaunch: null, launchCount: 0, interactions: 0, playSeconds: 0,
+  })
 
   useEffect(() => {
     async function load() {
-      const [p, m, v, s] = await Promise.all([
+      const [p, m, v, s, hi, fl, lc, ic, ps] = await Promise.all([
         window.catpet.storeGet('personality'),
         window.catpet.storeGet('soundMuted'),
         window.catpet.storeGet('soundVolume'),
         window.catpet.storeGet('catScale'),
+        window.catpet.storeGet('hungerInterval'),
+        window.catpet.storeGet('stats.firstLaunch'),
+        window.catpet.storeGet('stats.launchCount'),
+        window.catpet.storeGet('stats.interactions'),
+        window.catpet.storeGet('stats.playSeconds'),
       ])
       if (typeof p === 'string' && p in PERSONALITIES) setPersonality(p as PersonalityId)
       if (typeof m === 'boolean') setSoundMuted(m)
       if (typeof v === 'number')  setVolume(Math.round(v * 100))
       if (typeof s === 'number')  setCatScale(Math.round(s * 100))
+      if (typeof hi === 'number') setHungerHours(Math.round((hi / 3_600_000) * 10) / 10)
+      setStats({
+        firstLaunch:  typeof fl === 'string' ? fl : null,
+        launchCount:  typeof lc === 'number' ? lc : 0,
+        interactions: typeof ic === 'number' ? ic : 0,
+        playSeconds:  typeof ps === 'number' ? ps : 0,
+      })
     }
     load()
   }, [])
 
   async function save() {
     await Promise.all([
-      window.catpet.storeSet('personality',  personality),
-      window.catpet.storeSet('soundMuted',   soundMuted),
-      window.catpet.storeSet('soundVolume',  volume / 100),
-      window.catpet.storeSet('catScale',     catScale / 100),
+      window.catpet.storeSet('personality',    personality),
+      window.catpet.storeSet('soundMuted',     soundMuted),
+      window.catpet.storeSet('soundVolume',    volume / 100),
+      window.catpet.storeSet('catScale',       catScale / 100),
+      window.catpet.storeSet('hungerInterval', Math.round(hungerHours * 3_600_000)),
     ])
     window.catpet.notifyPrefsChanged()
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
+  }
+
+  function formatPlayTime(secs: number): string {
+    if (secs < 60)   return `${secs}s`
+    if (secs < 3600) return `${Math.floor(secs / 60)}m`
+    return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`
   }
 
   return (
@@ -97,6 +127,51 @@ export default function Preferences() {
             style={s.slider}
           />
         </label>
+      </section>
+
+      <section style={s.section}>
+        <div style={s.sectionLabel}>Hunger</div>
+        <label style={s.row}>
+          <span>Gets hungry after {hungerHours}h</span>
+          <input
+            type="range"
+            min={0.5}
+            max={8}
+            step={0.5}
+            value={hungerHours}
+            onChange={e => setHungerHours(Number(e.target.value))}
+            style={s.slider}
+          />
+        </label>
+        <div style={s.hint}>
+          Cat will meow for food after {hungerHours}h. Feed via tray icon or click on the cat.
+        </div>
+      </section>
+
+      <section style={s.section}>
+        <div style={s.sectionLabel}>Stats</div>
+        <div style={s.statGrid}>
+          <div style={s.statBox}>
+            <div style={s.statVal}>{stats.launchCount}</div>
+            <div style={s.statKey}>Launches</div>
+          </div>
+          <div style={s.statBox}>
+            <div style={s.statVal}>{stats.interactions}</div>
+            <div style={s.statKey}>Interactions</div>
+          </div>
+          <div style={s.statBox}>
+            <div style={s.statVal}>{formatPlayTime(stats.playSeconds)}</div>
+            <div style={s.statKey}>Play time</div>
+          </div>
+          <div style={s.statBox}>
+            <div style={s.statVal}>
+              {stats.firstLaunch
+                ? new Date(stats.firstLaunch).toLocaleDateString()
+                : '—'}
+            </div>
+            <div style={s.statKey}>First seen</div>
+          </div>
+        </div>
       </section>
 
       <div style={s.footer}>
@@ -174,6 +249,33 @@ const s: Record<string, CSSProperties> = {
   slider: {
     width: 200,
     accentColor: '#6c63ff',
+  },
+  hint: {
+    fontSize: 11,
+    color: '#666',
+    marginTop: 4,
+  },
+  statGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 10,
+  },
+  statBox: {
+    background: '#252540',
+    borderRadius: 8,
+    padding: '10px 14px',
+  },
+  statVal: {
+    fontSize: 20,
+    fontWeight: 700,
+    color: '#6c63ff',
+    marginBottom: 2,
+  },
+  statKey: {
+    fontSize: 11,
+    color: '#888',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.06em',
   },
   footer: {
     paddingTop: 8,

@@ -54,6 +54,14 @@ contextBridge.exposeInMainWorld('catpet', {
     return () => ipcRenderer.removeListener('cat:loaded', handler)
   },
 
+  // Hungry/feed cycle
+  notifyHungry: (isHungry: boolean) => ipcRenderer.send('cat:hungry', isHungry),
+  onFeed: (callback: () => void): (() => void) => {
+    const handler = () => callback()
+    ipcRenderer.on('cat:feed', handler)
+    return () => ipcRenderer.removeListener('cat:feed', handler)
+  },
+
   // Segment layers — PNG files per layer
   saveSegments: (slot: string, layers: Array<{ id: string; dataUrl: string }>): Promise<void> =>
     ipcRenderer.invoke('segments:save', slot, layers),

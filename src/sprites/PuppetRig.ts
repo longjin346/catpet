@@ -52,6 +52,8 @@ export class PuppetRig {
   private stateId:     PetStateId = 'idle'
   /** True when the cat is rendered facing the direction opposite to the photo. */
   private flipped:     boolean = false
+  private mouseX:      number = -1
+  private mouseY:      number = -1
 
   private constructor(
     _app: Application,
@@ -132,6 +134,12 @@ export class PuppetRig {
     this.walkTargetX = null
   }
 
+  /** Update mouse position for head tracking during play. */
+  setMousePos(x: number, y: number): void {
+    this.mouseX = x
+    this.mouseY = y
+  }
+
   set visible(v: boolean) {
     this.catGroup.visible = v
   }
@@ -183,6 +191,14 @@ export class PuppetRig {
     this.catGroup.x            = this.catX
     this.shadow.scale.set(1 - bob * 0.005, 1)
 
+    // ── Head tracking (play state) ───────────────────────────────────────────
+    let headTrackRot = 0
+    if (this.stateId === 'playing' && this.mouseX >= 0) {
+      const headY = this.catY - this.rig.catHeight * this.scale * 0.80
+      const dy    = this.mouseY - headY
+      headTrackRot = Math.max(-0.35, Math.min(0.35, dy / 220))
+    }
+
     // ── Per-layer lerp + animation ───────────────────────────────────────────
     for (const layer of this.layers) {
       const target = pose.layers[layer.id]
@@ -196,7 +212,7 @@ export class PuppetRig {
 
       switch (layer.id) {
         case 'head':
-          rotation += headBreath; break
+          rotation += headBreath + headTrackRot; break
         case 'tail':
           rotation += tailBreath; break
         case 'front-legs':

@@ -13,22 +13,31 @@ const CAT_X_DEFAULT = 200
 const CAT_HEIGHT    = 150
 const BOTTOM_PAD    = 20
 const STARTLE_SPEED = 900
+const NEAR_RADIUS   = 120  // px from cat center — click near triggers play
 
 // Periodic particle emit intervals (seconds)
 const PARTICLE_INTERVALS: Partial<Record<string, number>> = {
   sleeping: 2.8,
   grooming: 2.5,
   playing:  2.0,
+  hungry:   3.5,
 }
 
 const PARTICLE_TYPES: Partial<Record<string, ParticleType>> = {
   sleeping: 'zzz',
   grooming: 'sparkle',
   playing:  'heart',
+  hungry:   'exclaim',
 }
 
 // States that run the purr
-const PURRING_STATES = new Set(['idle', 'grooming'])
+const PURRING_STATES = new Set(['idle', 'grooming', 'sitting'])
+
+// All valid PetStateId values for the rig
+const VALID_STATES = new Set([
+  'idle', 'walking', 'sitting', 'sleeping', 'stretching',
+  'grooming', 'startled', 'playing', 'hungry',
+])
 
 interface FlatSprite {
   sprite:     Sprite
@@ -67,12 +76,16 @@ export default function PetView() {
   const prevStateRef  = useRef<string>('idle')
   const emitterRef    = useRef<ParticleEmitter | null>(null)
   const soundRef      = useRef<SoundManager | null>(null)
-  // Time of last periodic particle burst per state
   const lastBurstRef  = useRef<number>(0)
-  // Loaded cat scale multiplier
-  const catScaleRef    = useRef<number>(1.0)
+  const catScaleRef   = useRef<number>(1.0)
   const isDraggingRef  = useRef<boolean>(false)
   const dragOffsetXRef = useRef<number>(0)
+  // Hunger interval ID (returns to 'hungry' FSM state every HUNGER_INTERVAL ms)
+  const hungerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // ENERGY_TICK interval (every 60 s)
+  const energyTickRef  = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Track time spent in playing state for stats
+  const playStartRef   = useRef<number | null>(null)
 
   const clearScene = useCallback(() => {
     rigRef.current?.destroy()
@@ -159,6 +172,12 @@ export default function PetView() {
     }
   }, [clearScene, screenH, loadPrefs])
 
+  /** Increment an integer stat in the store. */
+  const bumpStat = useCallback(async (key: string, amount = 1) => {
+    const current = await window.catpet.storeGet(key)
+    await window.catpet.storeSet(key, (typeof current === 'number' ? current : 0) + amount)
+  }, [])
+
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -186,6 +205,32 @@ export default function PetView() {
       emitterRef.current = new ParticleEmitter(app)
 
       await loadCatData()
+
+      // Record first launch date if not set
+      const firstLaunch = await window.catpet.storeGet('stats.firstLaunch')
+      if (!firstLaunch) {
+        await window.catpet.storeSet('stats.firstLaunch', new Date().toISOString())
+      }
+
+      // Increment launch count
+      bumpStat('stats.launchCount')
+
+      // ENERGY_TICK every 60 s
+      energyTickRef.current = setInterval(() => {
+        actorRef.current?.send({ type: 'ENERGY_TICK' })
+      }, 60_000)
+
+      // Hunger timer — fires after stored interval (default 90 min)
+      async function scheduleHunger() {
+        if (hungerTimerRef.current) clearTimeout(hungerTimerRef.current)
+        const stored = await window.catpet.storeGet('hungerInterval')
+        const interval = typeof stored === 'number' ? stored : 5_400_000
+        hungerTimerRef.current = setTimeout(() => {
+          actorRef.current?.send({ type: 'HUNGRY' })
+          window.catpet.notifyHungry(true)
+        }, interval)
+      }
+      scheduleHunger()
 
       // ── Ticker ──────────────────────────────────────────────────────────────
       app.ticker.add(ticker => {
@@ -216,6 +261,21 @@ export default function PetView() {
             if (wasP  && !isP)  sound.stopPurr()
             if (stateVal === 'startled') sound.meow()
             if (stateVal === 'playing')  sound.chirp()
+            if (stateVal === 'hungry')   sound.meow()
+
+            // Stats: play time tracking
+            if (prev === 'playing' && playStartRef.current !== null) {
+              const secs = Math.floor((performance.now() - playStartRef.current) / 1000)
+              bumpStat('stats.playSeconds', secs)
+              playStartRef.current = null
+            }
+            if (stateVal === 'playing') {
+              playStartRef.current = performance.now()
+            }
+
+            // Hungry state: notify tray; clear when leaving
+            if (stateVal === 'hungry')  window.catpet.notifyHungry(true)
+            if (prev   === 'hungry')    window.catpet.notifyHungry(false)
 
             // Entry particle burst
             if (stateVal === 'startled') {
@@ -224,6 +284,8 @@ export default function PetView() {
               emitter?.burst(rig.x, screenH() - 170, 'heart', 3)
             } else if (stateVal === 'grooming') {
               emitter?.burst(rig.x, screenH() - 160, 'sparkle', 2)
+            } else if (stateVal === 'hungry') {
+              emitter?.burst(rig.x, screenH() - 160, 'exclaim', 2)
             }
 
             lastBurstRef.current = t
@@ -238,11 +300,13 @@ export default function PetView() {
             emitter.burst(rig.x, screenH() - 160, pType, count)
           }
 
-          const sid = stateVal as Parameters<typeof rig.setState>[0]
-          rig.setState(['idle','walking','sleeping','grooming','startled','playing'].includes(sid) ? sid : 'idle')
+          const sid = VALID_STATES.has(stateVal)
+            ? stateVal as Parameters<typeof rig.setState>[0]
+            : 'idle'
+          rig.setState(sid)
 
-          const useSleep  = stateVal === 'sleeping' && !!sleepRef.current
-          const useAction = stateVal === 'playing'  && !!actionRef.current
+          const useSleep  = stateVal === 'sleeping'   && !!sleepRef.current
+          const useAction = stateVal === 'playing'    && !!actionRef.current
           rig.visible = !useSleep && !useAction
 
           const result = rig.tick(ticker.deltaMS)
@@ -281,9 +345,25 @@ export default function PetView() {
 
     const unsubCatLoaded = window.catpet.onCatLoaded(loadCatData)
 
+    const unsubFeed = window.catpet.onFeed(() => {
+      actorRef.current?.send({ type: 'FEED' })
+      window.catpet.notifyHungry(false)
+      // Reschedule hunger timer
+      scheduleHungerFromStore()
+    })
+
+    async function scheduleHungerFromStore() {
+      if (hungerTimerRef.current) clearTimeout(hungerTimerRef.current)
+      const stored = await window.catpet.storeGet('hungerInterval')
+      const interval = typeof stored === 'number' ? stored : 5_400_000
+      hungerTimerRef.current = setTimeout(() => {
+        actorRef.current?.send({ type: 'HUNGRY' })
+        window.catpet.notifyHungry(true)
+      }, interval)
+    }
+
     const unsubPrefsChanged = window.catpet.onPrefsChanged(async () => {
       const newScale = await loadPrefs()
-      // If scale changed, reload full scene; otherwise prefs applied in-place
       if (Math.abs(newScale - catScaleRef.current) > 0.01) {
         loadCatData()
       }
@@ -293,6 +373,9 @@ export default function PetView() {
     let lastMouseX = 0, lastMouseY = 0, lastMouseT = 0
 
     function onMouseMove(e: MouseEvent) {
+      // Pass mouse position to rig for head tracking in play state
+      rigRef.current?.setMousePos(e.clientX, e.clientY)
+
       // During drag: move cat, keep click-through disabled, skip startle logic
       if (isDraggingRef.current) {
         rigRef.current?.teleport(e.clientX - dragOffsetXRef.current)
@@ -332,12 +415,33 @@ export default function PetView() {
       }
     }
 
+    function nearTest(ex: number, ey: number): boolean {
+      const rig = rigRef.current
+      if (!rig) return false
+      const dx = ex - rig.x
+      const dy = ey - (screenH() - BOTTOM_PAD - CAT_HEIGHT / 2)
+      return Math.sqrt(dx * dx + dy * dy) <= NEAR_RADIUS && !rig.hitTest(ex, ey)
+    }
+
     function onPointerDown(e: PointerEvent) {
       const rig = rigRef.current
       if (rig?.hitTest(e.clientX, e.clientY)) {
+        // Hungry: clicking on cat feeds it
+        const snap = actorRef.current?.getSnapshot()
+        if (snap?.value === 'hungry') {
+          actorRef.current?.send({ type: 'FEED' })
+          window.catpet.notifyHungry(false)
+          scheduleHungerFromStore()
+          bumpStat('stats.interactions')
+          return
+        }
         isDraggingRef.current  = true
         dragOffsetXRef.current = e.clientX - rig.x
         actorRef.current?.send({ type: 'STARTLE' })
+        bumpStat('stats.interactions')
+      } else if (nearTest(e.clientX, e.clientY)) {
+        actorRef.current?.send({ type: 'PLAY_NEAR' })
+        bumpStat('stats.interactions')
       }
     }
 
@@ -357,6 +461,7 @@ export default function PetView() {
     return () => {
       cancelled = true
       unsubCatLoaded()
+      unsubFeed()
       unsubPrefsChanged()
       window.removeEventListener('mousemove',   onMouseMove)
       window.removeEventListener('pointerdown', onPointerDown)
@@ -367,11 +472,13 @@ export default function PetView() {
       emitterRef.current = null
       soundRef.current?.destroy()
       soundRef.current = null
+      if (energyTickRef.current)  clearInterval(energyTickRef.current)
+      if (hungerTimerRef.current) clearTimeout(hungerTimerRef.current)
       clearScene()
       appRef.current?.destroy(true)
       appRef.current = null
     }
-  }, [loadCatData, clearScene, loadPrefs, screenH])
+  }, [loadCatData, clearScene, loadPrefs, screenH, bumpStat])
 
   return (
     <div
