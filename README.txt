@@ -37,14 +37,17 @@ HOW TO USE
 • Your cat wanders, naps, and plays on its own
 • Click near your cat to play with it
 • Click directly on your cat to startle it (sorry!)
-• Right-click the tray icon for options:
-    - Settings
+• Right-click (or left-click) the tray icon for options:
+    - Show/Hide Cat
+    - Upload Photos
+    - Preferences
     - Quit
 
 CONTROLS
 ────────
+  Ctrl+Shift+H     Show / hide your cat
   Ctrl+Shift+P     Open photo manager
-  Ctrl+Shift+S     Open settings
+  Ctrl+Shift+S     Open preferences
   Ctrl+Shift+Q     Quit CatPet
 
 FAQ

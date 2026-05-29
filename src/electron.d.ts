@@ -7,6 +7,10 @@ declare global {
       setCatHover(isHovering: boolean): void
       // Window management
       openSettings(): void
+      openPreferences(): void
+      // Preferences sync
+      notifyPrefsChanged(): void
+      onPrefsChanged(callback: () => void): () => void
       // File operations
       openFileDialog(): Promise<string | null>
       readFile(filePath: string): Promise<string> // returns base64 data URL
@@ -22,6 +26,9 @@ declare global {
       catReady(): void
       // Notifications from main to renderer
       onCatLoaded(callback: () => void): () => void
+      // Hungry/feed cycle
+      notifyHungry(isHungry: boolean): void
+      onFeed(callback: () => void): () => void
       // Segment layers (id → PNG data URL)
       saveSegments(slot: string, layers: Array<{ id: string; dataUrl: string }>): Promise<void>
       loadSegments(slot: string): Promise<Record<string, string> | null>

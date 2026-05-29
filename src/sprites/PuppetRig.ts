@@ -16,6 +16,10 @@ const WALK_SPEED    = 55
 const ARRIVE_THRESH = 8
 const EDGE_PAD      = 40
 
+// Walk speed multiplier, updated by PetView when personality changes
+let walkSpeedMultiplier = 1.0
+export function setWalkSpeedMultiplier(m: number): void { walkSpeedMultiplier = m }
+
 function lerp(a: number, b: number, dt: number): number {
   return a + (b - a) * Math.min(1, dt * LERP_SPEED)
 }
@@ -48,6 +52,8 @@ export class PuppetRig {
   private stateId:     PetStateId = 'idle'
   /** True when the cat is rendered facing the direction opposite to the photo. */
   private flipped:     boolean = false
+  private mouseX:      number = -1
+  private mouseY:      number = -1
 
   private constructor(
     _app: Application,
@@ -55,9 +61,10 @@ export class PuppetRig {
     catScreenX: number,
     screenH: number,
     screenW: number,
+    scaleMult = 1.0,
   ) {
     this.rig     = rig
-    this.scale   = CAT_HEIGHT_PX / rig.catHeight
+    this.scale   = (CAT_HEIGHT_PX / rig.catHeight) * scaleMult
     this.catX    = catScreenX
     this.catY    = screenH - BOTTOM_PAD
     this.screenW = screenW
@@ -80,8 +87,9 @@ export class PuppetRig {
     catScreenX: number,
     screenH: number,
     screenW: number,
+    scaleMult = 1.0,
   ): Promise<PuppetRig> {
-    const puppet = new PuppetRig(app, rig, catScreenX, screenH, screenW)
+    const puppet = new PuppetRig(app, rig, catScreenX, screenH, screenW, scaleMult)
     const { bboxOrigin, catWidth, catHeight } = rig
     const s = puppet.scale
 
@@ -118,6 +126,18 @@ export class PuppetRig {
 
   setWalkTarget(x: number): void {
     this.walkTargetX = Math.max(EDGE_PAD, Math.min(this.screenW - EDGE_PAD, x))
+  }
+
+  /** Instantly move the cat to x, cancelling any active walk. */
+  teleport(x: number): void {
+    this.catX        = Math.max(EDGE_PAD, Math.min(this.screenW - EDGE_PAD, x))
+    this.walkTargetX = null
+  }
+
+  /** Update mouse position for head tracking during play. */
+  setMousePos(x: number, y: number): void {
+    this.mouseX = x
+    this.mouseY = y
   }
 
   set visible(v: boolean) {
@@ -161,7 +181,7 @@ export class PuppetRig {
         this.walkTargetX = null
         arrived          = true
       } else {
-        this.catX += Math.sign(dx) * Math.min(WALK_SPEED * dt, dist)
+        this.catX += Math.sign(dx) * Math.min(WALK_SPEED * walkSpeedMultiplier * dt, dist)
       }
     }
 
@@ -170,6 +190,14 @@ export class PuppetRig {
 
     this.catGroup.x            = this.catX
     this.shadow.scale.set(1 - bob * 0.005, 1)
+
+    // ── Head tracking (play state) ───────────────────────────────────────────
+    let headTrackRot = 0
+    if (this.stateId === 'playing' && this.mouseX >= 0) {
+      const headY = this.catY - this.rig.catHeight * this.scale * 0.80
+      const dy    = this.mouseY - headY
+      headTrackRot = Math.max(-0.35, Math.min(0.35, dy / 220))
+    }
 
     // ── Per-layer lerp + animation ───────────────────────────────────────────
     for (const layer of this.layers) {
@@ -184,7 +212,7 @@ export class PuppetRig {
 
       switch (layer.id) {
         case 'head':
-          rotation += headBreath; break
+          rotation += headBreath + headTrackRot; break
         case 'tail':
           rotation += tailBreath; break
         case 'front-legs':

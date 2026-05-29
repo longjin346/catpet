@@ -48,10 +48,13 @@ src/
   main.tsx      — React entry point
   electron.d.ts — Global window.catpet type declaration
   ui/
-    App.tsx          — Route: ?view=settings → Upload wizard, default → PetView
-    PetView.tsx      — PixiJS overlay; PuppetRig + FSM actor; multi-photo routing
-    Upload.tsx       — 6-slot guided upload wizard + background removal + segmentation
-    QualityMeter.tsx — 1–6 photo count with color-coded quality label
+    App.tsx             — Route: ?view=onboarding | settings | preferences | default overlay
+    PetView.tsx         — PixiJS overlay; PuppetRig + FSM actor; particles; sound; multi-photo routing
+    OnboardingWizard.tsx — 4-step first-launch wizard (welcome → primary → optional → launch)
+    CatGuide.tsx        — Canvas-drawn cat silhouettes for each photo slot (6 drawings)
+    Upload.tsx          — 6-slot photo management grid (returning users via tray)
+    QualityMeter.tsx    — 1–6 photo count with color-coded quality label
+    Preferences.tsx     — Personality picker + sound + cat-size settings panel
   processing/
     background-removal.ts  — @imgly/background-removal (WASM) wrapper with progress cb
     photo-validator.ts     — Size / brightness / sharpness checks (Canvas API)
@@ -161,8 +164,8 @@ The rig always ticks (invisible when a flat photo takes over) so position and po
 | 4 | Puppet rig + PixiJS v8 + idle breathing animation | **Done** |
 | 5 | XState FSM + pose library + lerp interpolation | **Done** |
 | 6 | Directional walk flip + screen-edge clamp + multi-photo routing | **Done** |
-| 7 | Particle overlays + sound + settings panel + personality system | Pending |
-| 8 | First-launch onboarding wizard with photo guide | Pending |
+| 7 | Particle overlays + sound + settings panel + personality system | **Done** |
+| 8 | First-launch onboarding wizard with photo guide | **Done** |
 | 9 | Portable zip packaging + clean-machine verification | Pending |
 
 ---
@@ -177,9 +180,41 @@ pnpm electron:dev    # Vite HMR + Electron together
 ## Build
 
 ```bash
-pnpm build           # Vite + electron-builder → dist/win-unpacked/
-pnpm package:zip     # → dist/CatPet-x.x.x-win-x64.zip
+# Full type-check + bundle + package (run on Windows for a real exe)
+pnpm build           # tsc --noEmit && vite build && electron-builder → dist/win-unpacked/
+pnpm package:zip     # node scripts/package-portable.mjs → dist/CatPet-x.x.x-win-x64.zip
 ```
+
+### Build prerequisites
+
+- Run on **Windows x64** — cross-compiling the Electron exe from Linux is unsupported.
+- No additional runtimes needed on the target machine: everything (ONNX WASM, PixiJS, XState) is bundled into `dist/` by Vite.
+- Placeholder icons are in `build/`. Replace `build/icon.ico` and `build/icon.png` with a real 256×256 icon before distributing.
+
+### Portable zip structure
+
+```
+CatPet-0.1.0-win-x64.zip
+└── CatPet/
+    ├── CatPet.exe          ← double-click to launch
+    ├── README.txt
+    ├── resources/
+    │   └── app.asar        ← bundled renderer + main (WASM inside)
+    └── ...electron runtime files...
+```
+
+On first launch, `CatPet/userdata/` is created next to the exe.
+Copy the entire `CatPet/` folder to move to another machine — no install, no registry.
+
+### Clean-machine verification checklist
+
+1. Extract zip on a fresh Windows machine (no Node.js, no VC++ redist needed)
+2. Double-click `CatPet.exe` → onboarding wizard opens
+3. Upload a cat photo → background removal runs (WASM, ~15 s first time)
+4. Cat appears on screen, walks and breathes
+5. Check `CatPet/userdata/` was created next to the exe
+6. Copy the folder to a USB drive; run from there — still works
+7. Delete the folder — nothing left behind on the system
 
 ---
 

@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, screen, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, screen, dialog, session, globalShortcut } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import Store from 'electron-store'
-import { setupTray } from './tray'
+import { setupTray, updateTrayTooltip, updateTrayToggle, updateTrayHungry } from './tray'
 
 // Portable data path — next to exe when packaged, dev path otherwise
 const PORTABLE_DATA = app.isPackaged
@@ -14,11 +14,39 @@ app.setPath('appData', PORTABLE_DATA)
 
 const store = new Store()
 
-let overlayWin: BrowserWindow | null = null
-let settingsWin: BrowserWindow | null = null
+let overlayWin:     BrowserWindow | null = null
+let settingsWin:    BrowserWindow | null = null
+let prefsWin:       BrowserWindow | null = null
+let onboardingWin:  BrowserWindow | null = null
+let overlayShown    = false
 
 function isFirstLaunch(): boolean {
   return !fs.existsSync(path.join(PORTABLE_DATA, 'cat.json'))
+}
+
+function showOverlay(): void {
+  if (!overlayWin) return
+  overlayWin.show()
+  overlayShown = true
+  updateTrayToggle(true)
+}
+
+function toggleOverlay(): void {
+  if (!overlayWin) return
+  if (overlayShown) {
+    overlayWin.hide()
+    overlayShown = false
+    updateTrayToggle(false)
+  } else {
+    overlayWin.show()
+    overlayShown = true
+    updateTrayToggle(true)
+  }
+}
+
+function refreshTrayName(): void {
+  const config = store.get('catConfig') as { name?: string } | undefined
+  if (config?.name) updateTrayTooltip(config.name)
 }
 
 function createOverlayWindow() {
@@ -56,6 +84,32 @@ function createOverlayWindow() {
   }
 }
 
+function createOnboardingWindow() {
+  if (onboardingWin) {
+    onboardingWin.focus()
+    return
+  }
+
+  onboardingWin = new BrowserWindow({
+    width: 760,
+    height: 620,
+    title: 'CatPet — Welcome',
+    resizable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+
+  const base = process.env.VITE_DEV_SERVER_URL ?? `file://${path.join(__dirname, '../dist/index.html')}`
+  onboardingWin.loadURL(`${base}?view=onboarding`)
+
+  onboardingWin.on('closed', () => {
+    onboardingWin = null
+  })
+}
+
 function createSettingsWindow() {
   if (settingsWin) {
     settingsWin.focus()
@@ -82,13 +136,45 @@ function createSettingsWindow() {
   })
 }
 
+function createPreferencesWindow() {
+  if (prefsWin) {
+    prefsWin.focus()
+    return
+  }
+
+  prefsWin = new BrowserWindow({
+    width: 480,
+    height: 660,
+    title: 'CatPet — Preferences',
+    resizable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+
+  const base = process.env.VITE_DEV_SERVER_URL ?? `file://${path.join(__dirname, '../dist/index.html')}`
+  prefsWin.loadURL(`${base}?view=preferences`)
+
+  prefsWin.on('closed', () => {
+    prefsWin = null
+  })
+}
+
 // ─── IPC Handlers ─────────────────────────────────────────────────────────────
 
 ipcMain.on('cat-hover', (_e, isHovering: boolean) => {
   overlayWin?.setIgnoreMouseEvents(!isHovering, { forward: true })
 })
 
-ipcMain.on('open-settings', () => createSettingsWindow())
+ipcMain.on('open-settings',     () => createSettingsWindow())
+ipcMain.on('open-preferences',  () => createPreferencesWindow())
+ipcMain.on('cat:hungry', (_e, isHungry: boolean) => updateTrayHungry(isHungry))
+
+ipcMain.on('prefs:changed', () => {
+  overlayWin?.webContents.send('prefs:changed')
+})
 
 ipcMain.handle('app:is-first-launch', () => isFirstLaunch())
 
@@ -180,10 +266,14 @@ ipcMain.on('cat:ready', () => {
   if (!fs.existsSync(configPath)) fs.writeFileSync(configPath, '{}')
 
   // Show overlay and notify it to load the cat
-  overlayWin?.show()
+  showOverlay()
   overlayWin?.webContents.send('cat:loaded')
 
-  // Close settings window
+  // Update tray tooltip with cat name
+  refreshTrayName()
+
+  // Close whichever upload window is open
+  onboardingWin?.close()
   settingsWin?.close()
 })
 
@@ -192,20 +282,48 @@ ipcMain.on('cat:ready', () => {
 app.whenReady().then(() => {
   if (!fs.existsSync(PORTABLE_DATA)) fs.mkdirSync(PORTABLE_DATA, { recursive: true })
 
+  // Required for SharedArrayBuffer used by ONNX WASM worker threads.
+  // The dev server sets these via vite.config.ts; production needs them here.
+  session.defaultSession.webRequest.onHeadersReceived((_details, callback) => {
+    callback({
+      responseHeaders: {
+        ..._details.responseHeaders,
+        'Cross-Origin-Opener-Policy':   ['same-origin'],
+        'Cross-Origin-Embedder-Policy': ['require-corp'],
+      },
+    })
+  })
+
   createOverlayWindow()
 
   if (isFirstLaunch()) {
-    // First launch: open upload wizard automatically
-    createSettingsWindow()
+    // First launch: guided onboarding wizard
+    createOnboardingWindow()
   } else {
     // Returning user: show overlay with existing cat
-    overlayWin?.show()
+    showOverlay()
   }
 
   setupTray(
     () => createSettingsWindow(),
-    () => app.quit()
+    () => createPreferencesWindow(),
+    () => toggleOverlay(),
+    () => overlayWin?.webContents.send('cat:feed'),
+    () => app.quit(),
   )
+
+  // Set cat name in tray tooltip for returning users
+  if (!isFirstLaunch()) refreshTrayName()
+
+  // Global keyboard shortcuts
+  globalShortcut.register('CommandOrControl+Shift+P', () => createSettingsWindow())
+  globalShortcut.register('CommandOrControl+Shift+S', () => createPreferencesWindow())
+  globalShortcut.register('CommandOrControl+Shift+H', () => toggleOverlay())
+  globalShortcut.register('CommandOrControl+Shift+Q', () => app.quit())
+})
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
 })
 
 app.on('window-all-closed', () => {
